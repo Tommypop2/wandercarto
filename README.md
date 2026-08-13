@@ -9,8 +9,8 @@ runs entirely in your browser.
 
 ## Try it
 
-- **Online:** [yourname.github.io/wandercarto](#) *(enable GitHub Pages — see below)*
-- **Locally:** download `wandercarto.html` and open it directly in a browser
+- **Online:** **[rlschroeder.github.io/wandercarto](https://rlschroeder.github.io/wandercarto/)** — just open it, no download needed
+- **Locally:** download [`index.html`](index.html) (or clone the repo) and open it directly in a browser
 
 ## Features
 
