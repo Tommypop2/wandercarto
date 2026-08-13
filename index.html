@@ -1,0 +1,1141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wandercarto — GPX to poster</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root{
+    --paper:#f4efe4; --ink:#20211f; --mute:#8c8577; --line:#d8d0bd;
+    --accent:#8a5a3a;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:#141311; color:var(--paper);
+    font-family: Georgia, 'Times New Roman', serif;
+    min-height:100vh;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:48px 28px 90px;}
+  header{text-align:center; margin-bottom:36px;}
+  .eyebrow{letter-spacing:6px; font-size:12px; color:#a49c86; text-transform:uppercase;}
+  h1{font-size:40px; margin:10px 0 6px; letter-spacing:2px;}
+  .sub{color:#9a9284; font-size:15px; max-width:560px; margin:0 auto;}
+
+  .panel{
+    background:#1c1b18; border:1px solid #333029; border-radius:2px;
+    padding:28px; margin-bottom:28px;
+  }
+
+  #drop{
+    border:1.5px dashed #4a473d; border-radius:2px; padding:46px 20px;
+    text-align:center; cursor:pointer; transition:border-color .15s, background .15s;
+  }
+  #drop.hover{ border-color:var(--accent); background:#221f1a; }
+  #drop p{ margin:6px 0; color:#b6ae9c; font-size:15px; }
+  #drop .big{ font-size:19px; color:var(--paper); font-family: -apple-system, sans-serif; letter-spacing:.3px;}
+  #fileInput{display:none;}
+
+  #fileList{ margin-top:18px; font-size:13px; color:#9a9284; font-family:-apple-system,sans-serif; }
+  #fileList div{ display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #2a2822; }
+
+  .controls{ display:flex; gap:18px; flex-wrap:wrap; align-items:flex-end; margin-top:20px; }
+  .field{ display:flex; flex-direction:column; gap:6px; }
+  .field label{ font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#8f8878; font-family:-apple-system,sans-serif; }
+  select, input[type=text]{
+    background:#141311; border:1px solid #3a372e; color:var(--paper);
+    padding:9px 12px; font-family:-apple-system,sans-serif; font-size:14px; border-radius:2px; min-width:190px;
+  }
+  button{
+    background:var(--accent); color:#f4efe4; border:none; padding:11px 22px;
+    font-family:-apple-system,sans-serif; font-size:14px; letter-spacing:.4px; border-radius:2px;
+    cursor:pointer; transition:background .15s;
+  }
+  button:hover{ background:#a06a44; }
+  button:disabled{ background:#3a372e; color:#6c6858; cursor:not-allowed; }
+  button.ghost{ background:transparent; border:1px solid #4a473d; color:#cfc8b6; }
+  button.ghost:hover{ background:#221f1a; }
+
+  #status{ font-family:-apple-system,sans-serif; font-size:13px; color:#9a9284; margin-top:14px; min-height:18px; }
+  #status.live::before{ content:"● "; color:#7a9e6f; }
+  #status.fallback::before{ content:"● "; color:#c99a4e; }
+
+  #posterWrap{ text-align:center; }
+  #posterWrap svg{ max-width:100%; height:auto; box-shadow:0 30px 70px rgba(0,0,0,.5); }
+  .actions{ display:flex; gap:12px; justify-content:center; margin-top:22px; flex-wrap:wrap; }
+  .hidden{ display:none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Wandercarto</div>
+    <h1>GPX &rarr; Poster</h1>
+    <div class="sub">Drop the GPX files from any ride, hike, run, or paddle — one day or many. Get a monochrome map, a real elevation profile, and hillshaded terrain built from open elevation data.</div>
+  </header>
+
+  <div class="panel">
+    <div id="drop">
+      <div class="big">Drop GPX files here</div>
+      <p>or click to browse — multiple files OK, they'll be ordered by date/time</p>
+      <input id="fileInput" type="file" accept=".gpx" multiple>
+    </div>
+    <div id="fileList"></div>
+
+    <div class="controls">
+      <div class="field">
+        <label>Title</label>
+        <input id="titleInput" type="text" placeholder="e.g. Olympic Peninsula">
+      </div>
+      <div class="field">
+        <label>Subtitle</label>
+        <input id="subtitleInput" type="text" placeholder="e.g. A fortieth birthday loop">
+      </div>
+      <div class="field">
+        <label>Palette</label>
+        <select id="paletteSelect">
+          <option value="ink">Monochrome / ink</option>
+          <option value="days">Day-by-day colors</option>
+          <option value="film">Muted / film</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Terrain</label>
+        <select id="terrainSelect">
+          <option value="hillshade">Hillshade — real DEM (needs network)</option>
+          <option value="live">Contour lines — real elevation data</option>
+          <option value="stylized">Contour lines — stylized (offline)</option>
+          <option value="none">No terrain</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Aspect ratio</label>
+        <select id="aspectSelect">
+          <option value="2:3">2:3 Portrait (default)</option>
+          <option value="4:5">4:5 Portrait</option>
+          <option value="9:16">9:16 Portrait (Stories)</option>
+          <option value="1:1">1:1 Square</option>
+          <option value="3:2">3:2 Landscape</option>
+          <option value="5:4">5:4 Landscape</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Units</label>
+        <select id="unitSelect">
+          <option value="metric">Metric (km / m)</option>
+          <option value="imperial">Imperial (mi / ft)</option>
+        </select>
+      </div>
+      <button id="buildBtn" disabled>Build poster</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div class="panel hidden" id="posterPanel">
+    <div id="posterWrap"></div>
+    <div class="actions">
+      <button id="downloadSvg">Download SVG</button>
+      <button id="downloadPng" class="ghost">Download PNG</button>
+      <button id="rebuild" class="ghost">Rebuild with current settings</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------- GPX parsing ---------------- */
+function parseGPX(text, filename){
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  const trkpts = Array.from(doc.querySelectorAll("trkpt"));
+  const points = trkpts.map(pt => {
+    const eleEl = pt.querySelector("ele");
+    const timeEl = pt.querySelector("time");
+    return {
+      lat: parseFloat(pt.getAttribute("lat")),
+      lon: parseFloat(pt.getAttribute("lon")),
+      ele: eleEl ? parseFloat(eleEl.textContent) : 0,
+      time: timeEl ? timeEl.textContent : null
+    };
+  });
+  const nameEl = doc.querySelector("trk > name");
+  const name = nameEl ? nameEl.textContent.trim() : filename.replace(/\.gpx$/i, "");
+  return { name, filename, points };
+}
+
+function haversine(lat1, lon1, lat2, lon2){
+  const R = 6371000;
+  const p1 = lat1*Math.PI/180, p2 = lat2*Math.PI/180;
+  const dp = (lat2-lat1)*Math.PI/180, dl = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+
+function rideStats(ride){
+  let dist = 0, gain = 0, loss = 0;
+  const pts = ride.points;
+  for(let i=1;i<pts.length;i++){
+    dist += haversine(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+    const de = pts[i].ele - pts[i-1].ele;
+    if(de>0) gain += de; else loss += -de;
+  }
+  return { distanceKm: dist/1000, gainM: gain, lossM: loss };
+}
+
+/* ---------------- RDP simplification (iterative) ---------------- */
+function rdp(points, epsilon){
+  if(points.length < 3) return points.slice();
+  const keep = new Uint8Array(points.length);
+  keep[0]=1; keep[points.length-1]=1;
+  const stack = [[0, points.length-1]];
+  function perpDist(pt,a,b){
+    if(a[0]===b[0] && a[1]===b[1]) return Math.hypot(pt[0]-a[0], pt[1]-a[1]);
+    const [x1,y1]=a,[x2,y2]=b;
+    const num = Math.abs((y2-y1)*pt[0]-(x2-x1)*pt[1]+x2*y1-y2*x1);
+    const den = Math.hypot(y2-y1,x2-x1);
+    return num/den;
+  }
+  while(stack.length){
+    const [s,e] = stack.pop();
+    if(e-s < 2) continue;
+    let dmax=0, idx=s;
+    for(let i=s+1;i<e;i++){
+      const d = perpDist(points[i], points[s], points[e]);
+      if(d>dmax){ dmax=d; idx=i; }
+    }
+    if(dmax > epsilon){
+      keep[idx]=1;
+      stack.push([s,idx]);
+      stack.push([idx,e]);
+    }
+  }
+  return points.filter((_,i)=>keep[i]);
+}
+
+/* ---------------- projection helpers ---------------- */
+function makeProjector(rides){
+  const allPts = rides.flatMap(r=>r.points);
+  const meanLat = allPts.reduce((s,p)=>s+p.lat,0)/allPts.length;
+  const cosLat = Math.cos(meanLat*Math.PI/180);
+  const project = (lat,lon)=>[lon*cosLat, lat];
+  return { project, cosLat, meanLat };
+}
+
+/* ---------------- state ---------------- */
+let RIDES = [];
+let GRID_CACHE = null; // {values, nx, ny, ...} for contours, or {data,width,height,z,...} for DEM tiles
+let GRID_MODE = null;  // which terrain mode GRID_CACHE was built for
+
+/* ---------------- UI wiring ---------------- */
+const dropEl = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+const fileListEl = document.getElementById('fileList');
+const buildBtn = document.getElementById('buildBtn');
+const statusEl = document.getElementById('status');
+const posterPanel = document.getElementById('posterPanel');
+const posterWrap = document.getElementById('posterWrap');
+
+dropEl.addEventListener('click', ()=>fileInput.click());
+dropEl.addEventListener('dragover', e=>{ e.preventDefault(); dropEl.classList.add('hover'); });
+dropEl.addEventListener('dragleave', ()=> dropEl.classList.remove('hover'));
+dropEl.addEventListener('drop', e=>{
+  e.preventDefault(); dropEl.classList.remove('hover');
+  handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', e=> handleFiles(e.target.files));
+
+async function handleFiles(fileListObj){
+  const files = Array.from(fileListObj).filter(f=>f.name.toLowerCase().endsWith('.gpx'));
+  if(!files.length) return;
+  RIDES = [];
+  for(const f of files){
+    const text = await f.text();
+    try{
+      const ride = parseGPX(text, f.name);
+      if(ride.points.length < 2) continue;
+      ride.startTime = ride.points.find(p=>p.time)?.time || null;
+      RIDES.push(ride);
+    }catch(err){ console.error('parse fail', f.name, err); }
+  }
+  RIDES.sort((a,b)=>{
+    if(a.startTime && b.startTime) return new Date(a.startTime) - new Date(b.startTime);
+    return 0;
+  });
+  renderFileList();
+  buildBtn.disabled = RIDES.length === 0;
+  GRID_CACHE = null; GRID_MODE = null;
+}
+
+function renderFileList(){
+  fileListEl.innerHTML = '';
+  const U = makeUnits(document.getElementById('unitSelect')?.value);
+  RIDES.forEach((r,i)=>{
+    const s = rideStats(r);
+    const div = document.createElement('div');
+    const dateStr = r.startTime ? new Date(r.startTime).toISOString().slice(0,10) : '?';
+    div.innerHTML = `<span>Day ${i+1} — ${r.name} (${dateStr})</span><span>${U.dist(s.distanceKm).toFixed(0)} ${U.distShort.toLowerCase()} · +${Math.round(U.elev(s.gainM)).toLocaleString()} ${U.elevShort.toLowerCase()}</span>`;
+    fileListEl.appendChild(div);
+  });
+}
+document.addEventListener('change', e=>{ if(e.target && e.target.id==='unitSelect' && RIDES.length) renderFileList(); });
+
+document.getElementById('buildBtn').addEventListener('click', buildPoster);
+document.getElementById('rebuild').addEventListener('click', buildPoster);
+
+async function buildPoster(){
+  buildBtn.disabled = true;
+  statusEl.className = ''; statusEl.textContent = 'Crunching GPS points…';
+  posterPanel.classList.add('hidden');
+
+  const terrainMode = document.getElementById('terrainSelect').value;
+  const palette = document.getElementById('paletteSelect').value;
+  const titleOverride = document.getElementById('titleInput').value.trim();
+  const subtitleOverride = document.getElementById('subtitleInput').value.trim();
+  const [aspW, aspH] = document.getElementById('aspectSelect').value.split(':').map(Number);
+  const aspect = { w: aspW, h: aspH };
+  const unitSystem = document.getElementById('unitSelect').value;
+
+  const proj = makeProjector(RIDES);
+
+  // a cached layer built for a different terrain mode — or a different aspect ratio, since
+  // DEM tiles are fetched to cover the map rectangle — must not be reused
+  const cacheKey = `${terrainMode}|${aspW}:${aspH}`;
+  if(GRID_MODE !== cacheKey){ GRID_CACHE = null; GRID_MODE = cacheKey; }
+
+  if(terrainMode === 'hillshade' && !(GRID_CACHE && GRID_CACHE.isTerrain)){
+    let seconds = 0;
+    const ticker = setInterval(()=>{ seconds++; }, 1000);
+    statusEl.className = '';
+    statusEl.textContent = 'Fetching terrain tiles… (0s elapsed)';
+
+    const WATCHDOG_MS = 25000;
+    const watchdog = new Promise((_,rej)=>setTimeout(()=>rej(Object.assign(new Error('watchdog'),{name:'WatchdogError'})), WATCHDOG_MS));
+
+    try{
+      const tiles = await Promise.race([
+        fetchTerrainTiles(RIDES, mapRectBounds(RIDES, proj, aspect, 0.03), (d,t)=>{
+          statusEl.textContent = `Fetching terrain tiles… ${d}/${t} tiles (${seconds}s elapsed)`;
+        }),
+        watchdog
+      ]);
+      GRID_CACHE = tiles;
+      clearInterval(ticker);
+      statusEl.className = 'live';
+      statusEl.textContent = `Hillshade from real DEM (zoom ${tiles.z}, Mapzen/AWS Open Data).`;
+    }catch(err){
+      clearInterval(ticker);
+      console.warn('terrain tile fetch failed, falling back', err);
+      GRID_CACHE = buildStylizedGrid(RIDES, proj);
+      statusEl.className = 'fallback';
+      let reason = 'network error';
+      if(err && err.name === 'AbortError') reason = 'tile request timed out';
+      if(err && err.name === 'WatchdogError') reason = 'no response after 25s';
+      if(err && err.name === 'TaintError') reason = 'browser blocked reading the tiles (CORS)';
+      statusEl.textContent = `Terrain tiles unavailable (${reason}) — using stylized contours instead. Tip: opening this over a local server (run "python3 -m http.server" in this folder, then visit http://localhost:8000) usually fixes tile access.`;
+    }
+  } else if(terrainMode === 'live' && !GRID_CACHE){
+    let seconds = 0;
+    const ticker = setInterval(()=>{
+      seconds++;
+      statusEl.textContent = `Fetching real elevation data… (${seconds}s elapsed)`;
+    }, 1000);
+    statusEl.className = '';
+    statusEl.textContent = 'Fetching real elevation data… (0s elapsed)';
+
+    const WATCHDOG_MS = 15000;
+    const watchdogTimeout = new Promise((_, reject) => {
+      setTimeout(() => reject(Object.assign(new Error('watchdog timeout'), {name:'WatchdogError'})), WATCHDOG_MS);
+    });
+
+    try{
+      GRID_CACHE = await Promise.race([
+        fetchLiveGrid(RIDES, proj, (done,total)=>{
+          statusEl.textContent = `Fetching real elevation data… ${done}/${total} batches back (${seconds}s elapsed)`;
+        }),
+        watchdogTimeout
+      ]);
+      clearInterval(ticker);
+      statusEl.className = 'live';
+      statusEl.textContent = 'Using live elevation data (Open-Meteo / Copernicus DEM).';
+    }catch(err){
+      clearInterval(ticker);
+      console.warn('live fetch failed, falling back', err);
+      GRID_CACHE = buildStylizedGrid(RIDES, proj);
+      statusEl.className = 'fallback';
+      let reason = 'network/CORS error';
+      if(err && err.name === 'AbortError') reason = 'request timed out';
+      if(err && err.name === 'WatchdogError') reason = 'no response after 15s';
+      statusEl.textContent = `Live elevation fetch failed (${reason}) — using stylized contours instead. Tip: many public APIs (including this one) block requests from a local file:// page. Serving this file over a local server, e.g. running "python3 -m http.server" in its folder and opening it via http://localhost, often fixes it.`;
+    }
+  } else if(terrainMode === 'stylized'){
+    GRID_CACHE = buildStylizedGrid(RIDES, proj);
+    statusEl.className = 'fallback';
+    statusEl.textContent = 'Stylized contours (no network call made).';
+  } else if(terrainMode === 'none'){
+    GRID_CACHE = null;
+    statusEl.textContent = 'No terrain layer.';
+  } else if(GRID_CACHE && GRID_CACHE.live){
+    statusEl.className='live'; statusEl.textContent='Using live elevation data (cached from last fetch).';
+  } else if(GRID_CACHE){
+    statusEl.className='fallback'; statusEl.textContent='Using stylized contours (cached).';
+  }
+
+  const svg = renderPosterSVG(RIDES, proj, GRID_CACHE, palette, titleOverride, subtitleOverride, aspect, unitSystem);
+  posterWrap.innerHTML = svg;
+  posterPanel.classList.remove('hidden');
+  buildBtn.disabled = false;
+  posterPanel.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+/* ---------------- live elevation grid via Open-Meteo ---------------- */
+function fetchWithTimeout(url, ms){
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), ms);
+  return fetch(url, {signal: controller.signal}).finally(()=>clearTimeout(timer));
+}
+
+async function fetchLiveGrid(rides, proj, onProgress){
+  const allPts = rides.flatMap(r=>r.points);
+  const lats = allPts.map(p=>p.lat), lons = allPts.map(p=>p.lon);
+  const [minLat, maxLat] = extent(lats);
+  const [minLon, maxLon] = extent(lons);
+  const padLat = (maxLat-minLat)*0.25 || 0.05;
+  const padLon = (maxLon-minLon)*0.25 || 0.05;
+  const extMinLat = minLat-padLat, extMaxLat = maxLat+padLat;
+  const extMinLon = minLon-padLon, extMaxLon = maxLon+padLon;
+
+  const nx = 26, ny = 34;
+  const coords = [];
+  for(let gy=0; gy<ny; gy++){
+    for(let gx=0; gx<nx; gx++){
+      const lat = extMaxLat - (gy/(ny-1))*(extMaxLat-extMinLat);
+      const lon = extMinLon + (gx/(nx-1))*(extMaxLon-extMinLon);
+      coords.push([lat,lon]);
+    }
+  }
+
+  const batchSize = 90;
+  const batches = [];
+  for(let i=0; i<coords.length; i+=batchSize) batches.push(coords.slice(i, i+batchSize));
+
+  let done = 0;
+  const REQUEST_TIMEOUT_MS = 8000;
+  const results = await Promise.all(batches.map(async (batch)=>{
+    const latStr = batch.map(c=>c[0].toFixed(5)).join(',');
+    const lonStr = batch.map(c=>c[1].toFixed(5)).join(',');
+    const url = `https://api.open-meteo.com/v1/elevation?latitude=${latStr}&longitude=${lonStr}`;
+    const resp = await fetchWithTimeout(url, REQUEST_TIMEOUT_MS);
+    if(!resp.ok) throw new Error('elevation API status ' + resp.status);
+    const data = await resp.json();
+    if(!data.elevation) throw new Error('no elevation field');
+    done++;
+    if(onProgress) onProgress(done, batches.length);
+    return data.elevation;
+  }));
+
+  const values = results.flat();
+  if(values.length !== coords.length || values.some(v=>v===null || v===undefined)){
+    throw new Error('incomplete grid');
+  }
+
+  return {
+    values, nx, ny,
+    extMinLat, extMaxLat, extMinLon, extMaxLon,
+    live: true
+  };
+}
+
+/* ---------------- stylized fallback grid ---------------- */
+function buildStylizedGrid(rides, proj){
+  const allPts = rides.flatMap(r=>r.points);
+  const lats = allPts.map(p=>p.lat), lons = allPts.map(p=>p.lon);
+  const [minLat, maxLat] = extent(lats);
+  const [minLon, maxLon] = extent(lons);
+  const padLat = (maxLat-minLat)*0.25 || 0.05;
+  const padLon = (maxLon-minLon)*0.25 || 0.05;
+  const extMinLat = minLat-padLat, extMaxLat = maxLat+padLat;
+  const extMinLon = minLon-padLon, extMaxLon = maxLon+padLon;
+  const nx = 26, ny = 34;
+
+  // cheap deterministic smooth pseudo-terrain (sum of sines), no external calls
+  function noise(x,y){
+    return Math.sin(x*1.7+y*0.6)*0.5 + Math.sin(x*0.5-y*1.3+2.1)*0.35 + Math.sin(x*3.1+y*2.7+1.0)*0.15;
+  }
+  const values = [];
+  for(let gy=0; gy<ny; gy++){
+    for(let gx=0; gx<nx; gx++){
+      const u = gx/(nx-1)*6, v = gy/(ny-1)*6;
+      const ridge = -(((gx-nx*0.42)/(nx*0.55))**2 + ((gy-ny*0.5)/(ny*0.55))**2)*3.2;
+      values.push(noise(u,v) + ridge);
+    }
+  }
+  return { values, nx, ny, extMinLat, extMaxLat, extMinLon, extMaxLon, live:false };
+}
+
+/* ---------------- palette definitions ---------------- */
+function getPalette(name){
+  const palettes = {
+    ink:   { paper:'#f4efe4', ink:'#20211f', mute:'#8c8577', contour:'#20211f',
+             dayColor:(i,n)=>'#20211f' },
+    film:  { paper:'#efe9dd', ink:'#33342d', mute:'#8a8371', contour:'#33342d',
+             dayColor:(i,n)=>'#33342d' },
+    days:  { paper:'#f4efe4', ink:'#20211f', mute:'#8c8577', contour:'#8c8577',
+             dayColor:(i,n)=> d3.interpolateSpectral(0.15 + 0.7*(i/(Math.max(n-1,1)))) }
+  };
+  return palettes[name] || palettes.ink;
+}
+
+/* ---------------- small helpers ---------------- */
+// Loop-based extent: Math.min(...arr) can blow the call stack on 100k+ point arrays.
+function extent(arr){
+  let mn = Infinity, mx = -Infinity;
+  for(let i=0;i<arr.length;i++){ const v = arr[i]; if(v<mn) mn=v; if(v>mx) mx=v; }
+  return [mn,mx];
+}
+
+/* ---------------- terrain tiles (AWS Open Data, Terrarium encoding) ---------------- */
+/* Public S3 open-data bucket: no API key, no logo requirement, print-friendly.
+   Terrarium encoding: elevation_m = (R*256 + G + B/256) - 32768 */
+const TILE_URL = (z,x,y)=>`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+const TILE_SIZE = 256;
+const TILE_BUDGET = 36;
+
+function lonToTileX(lon,z){ return (lon+180)/360 * Math.pow(2,z); }
+function latToTileY(lat,z){
+  const r = lat*Math.PI/180;
+  return (1 - Math.log(Math.tan(r) + 1/Math.cos(r))/Math.PI)/2 * Math.pow(2,z);
+}
+
+function loadImage(url, timeoutMs){
+  return new Promise((resolve,reject)=>{
+    const img = new Image();
+    const timer = setTimeout(()=>{ img.src=''; reject(Object.assign(new Error('tile timeout'),{name:'AbortError'})); }, timeoutMs||10000);
+    img.crossOrigin = 'anonymous';
+    img.onload = ()=>{ clearTimeout(timer); resolve(img); };
+    img.onerror = ()=>{ clearTimeout(timer); reject(new Error('tile load failed')); };
+    img.src = url;
+  });
+}
+
+function routeBounds(rides, padFrac){
+  const allPts = rides.flatMap(r=>r.points);
+  const [minLat,maxLat] = extent(allPts.map(p=>p.lat));
+  const [minLon,maxLon] = extent(allPts.map(p=>p.lon));
+  const pf = padFrac ?? 0.12;
+  const pLat = (maxLat-minLat)*pf || 0.02;
+  const pLon = (maxLon-minLon)*pf || 0.02;
+  return { minLat:minLat-pLat, maxLat:maxLat+pLat, minLon:minLon-pLon, maxLon:maxLon+pLon };
+}
+
+async function fetchTerrainTiles(rides, bounds, onProgress){
+  const b = bounds;
+
+  // pick the highest zoom whose tile count fits the budget
+  let chosen = null;
+  for(let z=12; z>=5; z--){
+    const x0=Math.floor(lonToTileX(b.minLon,z)), x1=Math.floor(lonToTileX(b.maxLon,z));
+    const y0=Math.floor(latToTileY(b.maxLat,z)), y1=Math.floor(latToTileY(b.minLat,z));
+    const count=(x1-x0+1)*(y1-y0+1);
+    if(count<=TILE_BUDGET){ chosen={z,x0,x1,y0,y1,count}; break; }
+  }
+  if(!chosen) throw new Error('could not fit tiles in budget');
+
+  const {z,x0,x1,y0,y1} = chosen;
+  const cols = x1-x0+1, rows = y1-y0+1;
+  const canvas = document.createElement('canvas');
+  canvas.width = cols*TILE_SIZE; canvas.height = rows*TILE_SIZE;
+  const ctx = canvas.getContext('2d', {willReadFrequently:true});
+
+  const jobs = [];
+  let done = 0;
+  for(let ty=y0; ty<=y1; ty++){
+    for(let tx=x0; tx<=x1; tx++){
+      jobs.push((async ()=>{
+        const img = await loadImage(TILE_URL(z,tx,ty), 10000);
+        ctx.drawImage(img, (tx-x0)*TILE_SIZE, (ty-y0)*TILE_SIZE);
+        done++;
+        if(onProgress) onProgress(done, cols*rows);
+      })());
+    }
+  }
+  await Promise.all(jobs);
+
+  // Reading pixels throws a SecurityError if the bucket didn't send CORS headers.
+  let imgData;
+  try{
+    imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
+  }catch(e){
+    throw Object.assign(new Error('tile canvas is CORS-tainted'), {name:'TaintError'});
+  }
+
+  return {
+    data: imgData.data, width: canvas.width, height: canvas.height,
+    z, x0, y0, live:true, isTerrain:true
+  };
+}
+
+/* Decode terrarium elevation. Bilinear by default — nearest-neighbour sampling of a DEM
+   that is finer than the output raster produces stair-stepped ridges and moire. */
+function decodeElevAt(t, px, py){
+  const i = (py*t.width + px)*4;
+  return (t.data[i]*256 + t.data[i+1] + t.data[i+2]/256) - 32768;
+}
+
+function sampleTerrainElev(t, lat, lon, nearest){
+  const gx = lonToTileX(lon, t.z)*TILE_SIZE - t.x0*TILE_SIZE;
+  const gy = latToTileY(lat, t.z)*TILE_SIZE - t.y0*TILE_SIZE;
+  if(gx < 0 || gy < 0 || gx > t.width-1 || gy > t.height-1) return null;
+
+  if(nearest){
+    return decodeElevAt(t, Math.round(gx), Math.round(gy));
+  }
+  const x0 = Math.floor(gx), y0 = Math.floor(gy);
+  const x1 = Math.min(x0+1, t.width-1), y1 = Math.min(y0+1, t.height-1);
+  const fx = gx-x0, fy = gy-y0;
+  const e00 = decodeElevAt(t,x0,y0), e10 = decodeElevAt(t,x1,y0);
+  const e01 = decodeElevAt(t,x0,y1), e11 = decodeElevAt(t,x1,y1);
+  return (e00*(1-fx) + e10*fx)*(1-fy) + (e01*(1-fx) + e11*fx)*fy;
+}
+
+/* Ground resolution of the DEM itself, metres per source pixel. */
+function demMetresPerPixel(t, lat){
+  return (40075016.686 * Math.cos(lat*Math.PI/180) / Math.pow(2, t.z)) / TILE_SIZE;
+}
+
+/* Resample terrain into poster space and render a grayscale hillshade PNG data URI.
+   invProject(sx,sy) -> [lat,lon] so the raster aligns exactly with the drawn route. */
+function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
+  const o = opts || {};
+  const maxDim = 1500;
+  const sc = Math.min(1, maxDim/Math.max(rectW, rectH));
+  const OW = Math.max(2, Math.round(rectW*sc)), OH = Math.max(2, Math.round(rectH*sc));
+
+  const spanMetres = o.spanMetres ?? 60000;
+  const outMPerPx = spanMetres/OW;
+  const [midLat] = invProject(rectX+rectW/2, rectY+rectH/2);
+  const demMPerPx = demMetresPerPixel(t, midLat);
+  // When the DEM is finer than the output raster we are downsampling: average a few
+  // sub-samples per output pixel instead of point-sampling, or we get aliasing.
+  const ratio = outMPerPx/Math.max(demMPerPx, 1e-6);
+  const SS = Math.max(1, Math.min(3, Math.ceil(ratio)));
+
+  // 1) elevation grid in poster space. NaN marks "outside tile coverage" so it can be
+  //    rendered transparent rather than mistaken for sea level.
+  //    waterFrac tracks how many sub-samples were at/below sea level — voting beats
+  //    averaging at a coastline, where a mixed pixel's mean lands arbitrarily.
+  const elevRaw = new Float32Array(OW*OH);
+  const waterFrac = new Float32Array(OW*OH);
+  const SEA = o.seaLevel ?? 0.5;
+  let anyLand = false;
+  for(let oy=0; oy<OH; oy++){
+    for(let ox=0; ox<OW; ox++){
+      let sum = 0, n = 0, wv = 0;
+      for(let sy2=0; sy2<SS; sy2++){
+        for(let sx2=0; sx2<SS; sx2++){
+          const sx = rectX + (ox + (sx2+0.5)/SS)/OW*rectW;
+          const sy = rectY + (oy + (sy2+0.5)/SS)/OH*rectH;
+          const [lat,lon] = invProject(sx,sy);
+          const e = sampleTerrainElev(t, lat, lon);
+          if(e!==null){ sum += e; n++; if(e <= SEA) wv++; }
+        }
+      }
+      const i = oy*OW+ox;
+      elevRaw[i]  = n===0 ? NaN : sum/n;
+      waterFrac[i]= n===0 ? 0    : wv/n;
+      if(n>0 && elevRaw[i] > 0) anyLand = true;
+    }
+  }
+  if(!anyLand) throw new Error('terrain sample produced no land');
+
+  // 2) water mask, then clamp the sea flat. Bathymetry is real data but it turns the
+  //    shoreline into a cliff and paints a hard black rim on the coast.
+  const isWater = new Uint8Array(OW*OH);
+  const elevC = new Float32Array(OW*OH);
+  for(let i=0;i<OW*OH;i++){
+    const v = elevRaw[i];
+    if(Number.isNaN(v)){ elevC[i] = NaN; continue; }
+    isWater[i] = waterFrac[i] >= 0.5 ? 1 : 0;
+    elevC[i] = v < 0 ? 0 : v;
+  }
+
+  // 2a) The DEM fills voids over water with small positive values, which an absolute
+  //     height test reads as land — flat, unshaded, and visible as pale blotches offshore.
+  //     Real sea is dead flat, so flood-fill outward from known water through connected
+  //     flat, near-sea-level ground. A flood fill (rather than a few dilation passes)
+  //     absorbs blotches of any size; requiring connectivity keeps inland flats as land.
+  const NEAR_SEA = o.nearSeaLevel ?? 8;    // metres
+  const FLAT_RELIEF = o.flatRelief ?? 3;   // metres of relief across a 3x3 neighbourhood
+
+  const relief = new Float32Array(OW*OH);
+  for(let y=0;y<OH;y++){
+    for(let x=0;x<OW;x++){
+      let mn=Infinity, mx=-Infinity;
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+        const xx=x+dx, yy=y+dy;
+        if(xx<0||yy<0||xx>=OW||yy>=OH) continue;
+        const v = elevC[yy*OW+xx];
+        if(Number.isNaN(v)) continue;
+        if(v<mn) mn=v; if(v>mx) mx=v;
+      }
+      relief[y*OW+x] = (mx===-Infinity) ? Infinity : mx-mn;
+    }
+  }
+
+  const queue = new Int32Array(OW*OH);
+  let qHead = 0, qTail = 0;
+  for(let i=0;i<OW*OH;i++) if(isWater[i]) queue[qTail++] = i;
+  while(qHead < qTail){
+    const i = queue[qHead++];
+    const x = i % OW, y = (i - x)/OW;
+    for(let dy=-1;dy<=1;dy++){
+      for(let dx=-1;dx<=1;dx++){
+        if(dx===0 && dy===0) continue;
+        const xx=x+dx, yy=y+dy;
+        if(xx<0||yy<0||xx>=OW||yy>=OH) continue;
+        const j = yy*OW+xx;
+        if(isWater[j] || Number.isNaN(elevC[j])) continue;
+        if(elevC[j] > NEAR_SEA || relief[j] > FLAT_RELIEF) continue;
+        isWater[j] = 1;
+        queue[qTail++] = j;
+      }
+    }
+  }
+
+  // 2b) speckle removal: flip pixels that disagree with almost all their neighbours
+  for(let pass=0; pass<2; pass++){
+    const flips = [];
+    for(let y=0;y<OH;y++){
+      for(let x=0;x<OW;x++){
+        const i=y*OW+x;
+        if(Number.isNaN(elevC[i])) continue;
+        let w=0, tot=0;
+        for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+          if(dx===0&&dy===0) continue;
+          const xx=x+dx, yy=y+dy;
+          if(xx<0||yy<0||xx>=OW||yy>=OH) continue;
+          tot++; if(isWater[yy*OW+xx]) w++;
+        }
+        if(!tot) continue;
+        if(isWater[i] && w <= tot*0.25) flips.push([i,0]);
+        else if(!isWater[i] && w >= tot*0.875) flips.push([i,1]);
+      }
+    }
+    if(!flips.length) break;
+    for(const [i,v] of flips) isWater[i]=v;
+  }
+
+  // 3) light 3x3 smoothing to take the edge off resampling noise without losing ridges
+  const elev = new Float32Array(OW*OH);
+  for(let y=0;y<OH;y++){
+    for(let x=0;x<OW;x++){
+      const c = elevC[y*OW+x];
+      if(Number.isNaN(c)){ elev[y*OW+x] = NaN; continue; }
+      let sum=0, n=0;
+      for(let dy=-1;dy<=1;dy++){
+        for(let dx=-1;dx<=1;dx++){
+          const xx=x+dx, yy=y+dy;
+          if(xx<0||yy<0||xx>=OW||yy>=OH) continue;
+          const v = elevC[yy*OW+xx];
+          if(Number.isNaN(v)) continue;
+          const w = (dx===0&&dy===0) ? 4 : 1;
+          sum += v*w; n += w;
+        }
+      }
+      elev[y*OW+x] = n? sum/n : c;
+    }
+  }
+
+  // 2) hillshade (standard slope/aspect illumination)
+  const azimuth = (o.azimuth ?? 315) * Math.PI/180;
+  const zenith  = (90 - (o.altitude ?? 45)) * Math.PI/180;
+  const zFactor = o.zFactor ?? 1.0;
+  // metres per output pixel — spanMetres measures the rect's width, so scale by OW
+  const metresPerPx = Math.max(1, (o.spanMetres ?? 60000)/OW);
+
+  const out = document.createElement('canvas');
+  out.width = OW; out.height = OH;
+  const octx = out.getContext('2d');
+  const img = octx.createImageData(OW, OH);
+
+  const shadowRGB = o.shadowRGB || [32,33,31];
+  const waterRGB  = o.waterRGB  || [32,33,31];
+  const strength  = o.strength ?? 0.62;
+  const highlight = o.highlight ?? 0.35;
+  const waterAlpha= o.waterAlpha ?? 0.10;
+  const illFlat   = Math.cos(zenith); // illumination of perfectly flat ground
+
+  const at = (x,y)=>{
+    const cx = x<0?0:(x>=OW?OW-1:x);
+    const cy = y<0?0:(y>=OH?OH-1:y);
+    const v = elev[cy*OW+cx];
+    return Number.isNaN(v) ? 0 : v;
+  };
+
+  for(let y=0; y<OH; y++){
+    for(let x=0; x<OW; x++){
+      const idx = (y*OW+x)*4;
+      const e = elev[y*OW+x];
+
+      if(Number.isNaN(e)){ // outside tile coverage: leave the paper untouched
+        img.data[idx+3] = 0;
+        continue;
+      }
+
+      if(isWater[y*OW+x]){ // water: flat light tint, gives the coastline for free
+        img.data[idx]   = waterRGB[0];
+        img.data[idx+1] = waterRGB[1];
+        img.data[idx+2] = waterRGB[2];
+        img.data[idx+3] = Math.round(255*waterAlpha);
+        continue;
+      }
+
+      // Horn's method
+      const a=at(x-1,y-1), b=at(x,y-1), c=at(x+1,y-1);
+      const d=at(x-1,y),               f=at(x+1,y);
+      const g=at(x-1,y+1), h=at(x,y+1), i=at(x+1,y+1);
+      const dzdx = ((c+2*f+i)-(a+2*d+g))/(8*metresPerPx)*zFactor;
+      const dzdy = ((g+2*h+i)-(a+2*b+c))/(8*metresPerPx)*zFactor;
+      const slope = Math.atan(Math.sqrt(dzdx*dzdx + dzdy*dzdy));
+      let aspect = Math.atan2(dzdy, -dzdx);
+      if(aspect<0) aspect += 2*Math.PI;
+
+      let ill = Math.cos(zenith)*Math.cos(slope) + Math.sin(zenith)*Math.sin(slope)*Math.cos(azimuth - aspect);
+      ill = Math.max(0, Math.min(1, ill));
+
+      // Measure relative to flat ground so flats stay paper-coloured and only
+      // real slopes register. rel>0 = in shadow, rel<0 = catching the light.
+      const rel = (illFlat - ill)/illFlat;
+
+      if(rel >= 0){
+        const alpha = Math.max(0, Math.min(1, rel*strength));
+        img.data[idx]   = shadowRGB[0];
+        img.data[idx+1] = shadowRGB[1];
+        img.data[idx+2] = shadowRGB[2];
+        img.data[idx+3] = Math.round(255*alpha);
+      } else {
+        const alpha = Math.max(0, Math.min(1, -rel*highlight));
+        img.data[idx]   = 255;
+        img.data[idx+1] = 255;
+        img.data[idx+2] = 255;
+        img.data[idx+3] = Math.round(255*alpha);
+      }
+    }
+  }
+  octx.putImageData(img,0,0);
+  return out.toDataURL('image/png');
+}
+
+/* ---------------- units ---------------- */
+function makeUnits(system){
+  const imperial = system === 'imperial';
+  return {
+    imperial,
+    dist:      km => imperial ? km*0.621371 : km,
+    distShort: imperial ? 'MI' : 'KM',
+    distLong:  imperial ? 'MILES' : 'KILOMETERS',
+    elev:      m  => imperial ? m*3.28084 : m,
+    elevShort: imperial ? 'FT' : 'M'
+  };
+}
+
+/* ---------------- shared layout ---------------- */
+/* Both the renderer and the terrain fetch need identical geometry, so it lives in one place.
+   If these ever drift apart, the hillshade stops lining up with the route. */
+const REF_W = 1600, REF_H = 2400; // baseline portrait (2:3) design the layout was tuned against
+function computeCanvasSize(aspect){
+  const a = aspect || {w:2,h:3};
+  let W,H;
+  if(a.w <= a.h){ H = REF_H; W = REF_H * (a.w/a.h); }       // portrait or square: fix height
+  else { W = REF_H; H = REF_H * (a.h/a.w); }                 // landscape: fix width
+  return {W,H};
+}
+
+function computeLayout(rides, proj, aspect){
+  const {W,H} = computeCanvasSize(aspect);
+  const s = Math.min(W,H)/REF_W;
+  const MARGIN_X = W*0.0875;
+  // Title-block chrome (above the map) and elevation+footer chrome (below the map) each have an
+  // intrinsic height driven by font scale 's', not by canvas height H — so anchor both to 's',
+  // then let the map fill whatever vertical space is left between them.
+  const MAP_TOP = 520*s, MAP_BOTTOM = H - 550*s;
+  const map_w = W - 2*MARGIN_X, map_h = MAP_BOTTOM - MAP_TOP;
+
+  const allPts = rides.flatMap(r=>r.points);
+  const projPts = allPts.map(p=>proj.project(p.lat,p.lon));
+  const [minx, maxx] = extent(projPts.map(p=>p[0]));
+  const [miny, maxy] = extent(projPts.map(p=>p[1]));
+  const geo_w = maxx-minx, geo_h = maxy-miny;
+  const scale = Math.min(map_w/geo_w, map_h/geo_h) * 0.94;
+  const off_x = MARGIN_X + (map_w - geo_w*scale)/2;
+  const off_y = MAP_TOP + (map_h - geo_h*scale)/2;
+
+  const toSvg = (lat,lon)=>{
+    const [x,y] = proj.project(lat,lon);
+    return [ off_x + (x-minx)*scale, off_y + (maxy-y)*scale ];
+  };
+  const toSvgProj = (x,y)=>[ off_x + (x-minx)*scale, off_y + (maxy-y)*scale ];
+  const invProject = (sx,sy)=>{
+    const x = (sx - off_x)/scale + minx;
+    const y = maxy - (sy - off_y)/scale;
+    return [ y, x/proj.cosLat ];
+  };
+
+  return {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y,toSvg,toSvgProj,invProject};
+}
+
+/* Geographic bounds of the *drawn map rectangle* (not just the route) — terrain must
+   cover this whole area or the poster shows blank bands at the edges. */
+function mapRectBounds(rides, proj, aspect, padFrac){
+  const L = computeLayout(rides, proj, aspect);
+  const corners = [
+    L.invProject(L.MARGIN_X, L.MAP_TOP),
+    L.invProject(L.MARGIN_X + L.map_w, L.MAP_TOP),
+    L.invProject(L.MARGIN_X, L.MAP_BOTTOM),
+    L.invProject(L.MARGIN_X + L.map_w, L.MAP_BOTTOM)
+  ];
+  const [minLat, maxLat] = extent(corners.map(c=>c[0]));
+  const [minLon, maxLon] = extent(corners.map(c=>c[1]));
+  const pf = padFrac ?? 0.03;
+  const pLat = (maxLat-minLat)*pf || 0.01;
+  const pLon = (maxLon-minLon)*pf || 0.01;
+  return { minLat:minLat-pLat, maxLat:maxLat+pLat, minLon:minLon-pLon, maxLon:maxLon+pLon };
+}
+
+/* ---------------- main SVG renderer ---------------- */
+function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitleOverride, aspect, unitSystem){
+  const U = makeUnits(unitSystem);
+  const L = computeLayout(rides, proj, aspect);
+  const {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y} = L;
+  const {toSvg, toSvgProj, invProject} = L;
+  const pal = getPalette(paletteName);
+  // exact inverse of toSvg comes from computeLayout (shared with terrain fetch)
+
+  /* ---- simplified day paths (with per-point svg coords + elevation for gradient) ---- */
+  const dayPaths = rides.map(r=>{
+    const pp = r.points.map(p=>[...proj.project(p.lat,p.lon), p.ele]);
+    // rdp on xy only, but keep elevation by nearest-match afterward via index map
+    const xy = pp.map(p=>[p[0],p[1]]);
+    const simpXY = rdp(xy, 0.00003);
+    // map back to elevation by nearest original index (cheap: reuse ratio sampling)
+    const simplified = simpXY.map(([x,y])=>{
+      // find matching elevation by scanning is expensive; approximate via closest index proportion
+      return [x,y];
+    });
+    return simplified.map(([x,y])=>toSvgProj(x,y));
+  });
+  const dayStartEnd = dayPaths.map(p=>[p[0], p[p.length-1]]);
+
+  /* ---- elevation profile from real GPX elevation ---- */
+  let cum = 0;
+  const profile = [];
+  const dayBreaks = [];
+  rides.forEach(r=>{
+    const pts = r.points;
+    const step = Math.max(1, Math.floor(pts.length/900));
+    const sampled = [];
+    for(let i=0;i<pts.length;i+=step) sampled.push(pts[i]);
+    if(sampled[sampled.length-1] !== pts[pts.length-1]) sampled.push(pts[pts.length-1]);
+    for(let i=0;i<sampled.length;i++){
+      if(i>0) cum += haversine(sampled[i-1].lat, sampled[i-1].lon, sampled[i].lat, sampled[i].lon)/1000;
+      profile.push([cum, sampled[i].ele]);
+    }
+    dayBreaks.push(cum);
+  });
+  const totalDist = cum;
+  const elevs = profile.map(p=>p[1]);
+  const [minElev, maxElev] = extent(elevs);
+
+  const EL_TOP = MAP_BOTTOM + 100*s, EL_BOTTOM = MAP_BOTTOM + 290*s;
+  const el_w = W - 2*MARGIN_X;
+  function elXY(dist, elev){
+    const x = MARGIN_X + (dist/totalDist)*el_w;
+    const y = EL_BOTTOM - ((elev-minElev)/(maxElev-minElev))*(EL_BOTTOM-EL_TOP);
+    return [x,y];
+  }
+  const elPts = profile.map(([d,e])=>elXY(d,e));
+  const elLine = "M " + elPts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" L ");
+  const elArea = elLine + ` L ${elPts[elPts.length-1][0].toFixed(1)},${EL_BOTTOM.toFixed(1)} L ${elPts[0][0].toFixed(1)},${EL_BOTTOM.toFixed(1)} Z`;
+  const elTicks = dayBreaks.slice(0,-1).map(db => MARGIN_X + (db/totalDist)*el_w);
+
+  /* ---- stats ---- */
+  const stats = rides.map(rideStats);
+  const totalKm = stats.reduce((s,r)=>s+r.distanceKm,0);
+  const totalGain = stats.reduce((s,r)=>s+r.gainM,0);
+  const nDays = rides.length;
+  const firstDate = rides[0].startTime ? new Date(rides[0].startTime) : null;
+  const lastDate = rides[nDays-1].startTime ? new Date(rides[nDays-1].startTime) : null;
+  let dateStr = '';
+  if(firstDate && lastDate){
+    const months = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
+    const sameDay = firstDate.getUTCFullYear()===lastDate.getUTCFullYear()
+                 && firstDate.getUTCMonth()===lastDate.getUTCMonth()
+                 && firstDate.getUTCDate()===lastDate.getUTCDate();
+    if(sameDay){
+      dateStr = `${months[firstDate.getUTCMonth()]} ${firstDate.getUTCDate()}, ${firstDate.getUTCFullYear()}`;
+    } else if(firstDate.getUTCFullYear()===lastDate.getUTCFullYear() && firstDate.getUTCMonth()===lastDate.getUTCMonth()){
+      dateStr = `${months[firstDate.getUTCMonth()]} ${firstDate.getUTCDate()}\u2013${lastDate.getUTCDate()}, ${firstDate.getUTCFullYear()}`;
+    } else {
+      dateStr = `${months[firstDate.getUTCMonth()]} ${firstDate.getUTCDate()} \u2013 ${months[lastDate.getUTCMonth()]} ${lastDate.getUTCDate()}, ${lastDate.getUTCFullYear()}`;
+    }
+  }
+
+  // A single-day outing shouldn't advertise "1 DAY" or repeat itself in a per-day breakdown.
+  const multiDay = nDays > 1;
+  const headStats = multiDay
+    ? `${U.dist(totalKm).toFixed(0)} ${U.distShort}  \u00b7  ${nDays} DAYS  \u00b7  ${Math.round(U.elev(totalGain)).toLocaleString()} ${U.elevShort} CLIMBED`
+    : `${U.dist(totalKm).toFixed(0)} ${U.distShort}  \u00b7  ${Math.round(U.elev(totalGain)).toLocaleString()} ${U.elevShort} CLIMBED`;
+
+  const title = (titleOverride || 'YOUR ROUTE').toUpperCase();
+  const subtitle = subtitleOverride ? subtitleOverride.toUpperCase() : '';
+
+  /* ---- terrain layer: hillshade raster, or contour lines ---- */
+  let contourSvg = '';
+  let hillshadeSvg = '';
+  let usedTerrainSource = null;
+
+  if(grid && grid.isTerrain){
+    // real DEM raster -> grayscale hillshade, resampled into poster space
+    // width of the mapped area in metres, for correct slope scaling
+    const [swLat, swLon] = invProject(MARGIN_X, MAP_BOTTOM);
+    const [seLat, seLon] = invProject(MARGIN_X+map_w, MAP_BOTTOM);
+    const spanMetres = haversine(swLat, swLon, seLat, seLon) || 60000;
+    const uri = buildHillshadeDataURI(grid, invProject, MARGIN_X, MAP_TOP, map_w, map_h, {
+      azimuth:315, altitude:45, strength:0.62, waterAlpha:0.10,
+      shadowRGB:[32,33,31], waterRGB:[32,33,31],
+      spanMetres
+    });
+    hillshadeSvg = `<image x="${MARGIN_X.toFixed(1)}" y="${MAP_TOP.toFixed(1)}" width="${map_w.toFixed(1)}" height="${map_h.toFixed(1)}" href="${uri}" preserveAspectRatio="none"/>`;
+    usedTerrainSource = 'dem';
+  } else if(grid){
+    const [gmin,gmax] = extent(grid.values);
+    const thresholds = d3.range(1,10).map(i => gmin + (gmax-gmin)*i/10);
+    const contourGen = d3.contours().size([grid.nx, grid.ny]).thresholds(thresholds);
+    const contours = contourGen(grid.values);
+
+    function gridToSvg(gx, gy){
+      const lat = grid.extMaxLat - (gy/(grid.ny-1))*(grid.extMaxLat-grid.extMinLat);
+      const lon = grid.extMinLon + (gx/(grid.nx-1))*(grid.extMaxLon-grid.extMinLon);
+      return toSvg(lat, lon);
+    }
+
+    const parts = [];
+    contours.forEach((feature, li)=>{
+      const isIndex = li % 3 === 0;
+      const w = (isIndex ? 1.1 : 0.6) * s;
+      const op = isIndex ? 0.32 : 0.15;
+      let d = '';
+      feature.coordinates.forEach(polygon=>{
+        polygon.forEach(ring=>{
+          const svgRing = ring.map(([gx,gy])=>gridToSvg(gx,gy));
+          d += 'M ' + svgRing.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L ') + ' Z ';
+        });
+      });
+      parts.push(`<path d="${d}" fill="none" stroke="${pal.contour}" stroke-width="${w.toFixed(2)}" opacity="${op}"/>`);
+    });
+    contourSvg = parts.join('\n');
+  }
+
+  /* ---- route paths ---- */
+  const routeParts = dayPaths.map((pts, i)=>{
+    const d = "M " + pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" L ");
+    const color = pal.dayColor(i, dayPaths.length);
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${(3.2*s).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }).join("\n");
+
+  const startPt = dayStartEnd[0][0];
+  const finishPt = dayStartEnd[dayStartEnd.length-1][1];
+  const flip = startPt[0] > (W - MARGIN_X - 220*s);
+  const anchor = flip ? 'end' : 'start';
+  const lx = flip ? startPt[0]-20*s : startPt[0]+20*s;
+  const lx2 = flip ? finishPt[0]-20*s : finishPt[0]+20*s;
+
+  const junctionMarkers = dayStartEnd.slice(1).map(([st,e])=>
+    `<circle cx="${st[0].toFixed(1)}" cy="${st[1].toFixed(1)}" r="${(4*s).toFixed(2)}" fill="${pal.paper}" stroke="${pal.ink}" stroke-width="${(1.5*s).toFixed(2)}"/>`
+  ).join("\n");
+
+  const footerLineY = MAP_BOTTOM + 335*s, footerDayY = MAP_BOTTOM + 375*s, footerKmY = MAP_BOTTOM + 405*s, footerGainY = MAP_BOTTOM + 429*s;
+
+  const footerCols = multiDay ? rides.map((r,i)=>{
+    const cw = (W-2*MARGIN_X)/rides.length;
+    const cx = MARGIN_X + cw*i + cw/2;
+    const st = stats[i];
+    return `
+      <text x="${cx.toFixed(1)}" y="${footerDayY.toFixed(1)}" text-anchor="middle" font-size="${(15*s).toFixed(1)}" letter-spacing="${(1.5*s).toFixed(2)}" fill="${pal.mute}">DAY ${i+1}</text>
+      <text x="${cx.toFixed(1)}" y="${footerKmY.toFixed(1)}" text-anchor="middle" font-size="${(19*s).toFixed(1)}" fill="${pal.ink}">${U.dist(st.distanceKm).toFixed(0)} ${U.distShort}</text>
+      <text x="${cx.toFixed(1)}" y="${footerGainY.toFixed(1)}" text-anchor="middle" font-size="${(14*s).toFixed(1)}" fill="${pal.mute}">+${Math.round(U.elev(st.gainM)).toLocaleString()} ${U.elevShort}</text>`;
+  }).join("\n") : '';
+
+  const subtitleY = 220*s, titleY = 320*s, ruleY = 368*s, dateY = 415*s, statsY = 465*s, bottomY = MAP_BOTTOM + 480*s;
+  const inset1 = 60*s, inset2 = 72*s;
+
+  const svg = `
+<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" xmlns="http://www.w3.org/2000/svg" font-family="Georgia, 'Times New Roman', serif">
+  <rect x="0" y="0" width="${W.toFixed(1)}" height="${H.toFixed(1)}" fill="${pal.paper}"/>
+  <rect x="${inset1.toFixed(1)}" y="${inset1.toFixed(1)}" width="${(W-2*inset1).toFixed(1)}" height="${(H-2*inset1).toFixed(1)}" fill="none" stroke="${pal.ink}" stroke-width="${(1.5*s).toFixed(2)}" opacity="0.5"/>
+  <rect x="${inset2.toFixed(1)}" y="${inset2.toFixed(1)}" width="${(W-2*inset2).toFixed(1)}" height="${(H-2*inset2).toFixed(1)}" fill="none" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.3"/>
+
+  ${subtitle ? `<text x="${W/2}" y="${subtitleY.toFixed(1)}" text-anchor="middle" font-size="${(30*s).toFixed(1)}" letter-spacing="${(10*s).toFixed(2)}" fill="${pal.mute}">${subtitle}</text>` : ''}
+  <text x="${W/2}" y="${titleY.toFixed(1)}" text-anchor="middle" font-size="${((title.length>18?70:92)*s).toFixed(1)}" font-weight="bold" letter-spacing="${(6*s).toFixed(2)}" fill="${pal.ink}">${title}</text>
+  <line x1="${(W/2-260*s).toFixed(1)}" y1="${ruleY.toFixed(1)}" x2="${(W/2+260*s).toFixed(1)}" y2="${ruleY.toFixed(1)}" stroke="${pal.ink}" stroke-width="${(1.5*s).toFixed(2)}"/>
+  ${dateStr ? `<text x="${W/2}" y="${dateY.toFixed(1)}" text-anchor="middle" font-size="${(26*s).toFixed(1)}" letter-spacing="${(5*s).toFixed(2)}" fill="${pal.mute}">${dateStr}</text>` : ''}
+  <text x="${W/2}" y="${statsY.toFixed(1)}" text-anchor="middle" font-size="${(22*s).toFixed(1)}" letter-spacing="${(4*s).toFixed(2)}" fill="${pal.mute}">${headStats}</text>
+
+  <clipPath id="mapClip"><rect x="${MARGIN_X.toFixed(1)}" y="${MAP_TOP.toFixed(1)}" width="${map_w.toFixed(1)}" height="${map_h.toFixed(1)}"/></clipPath>
+  <g clip-path="url(#mapClip)">${hillshadeSvg}${contourSvg}</g>
+
+  ${routeParts}
+  <circle cx="${startPt[0].toFixed(1)}" cy="${startPt[1].toFixed(1)}" r="${(9*s).toFixed(2)}" fill="${pal.paper}" stroke="${pal.ink}" stroke-width="${(2.5*s).toFixed(2)}"/>
+  <circle cx="${finishPt[0].toFixed(1)}" cy="${finishPt[1].toFixed(1)}" r="${(6*s).toFixed(2)}" fill="${pal.ink}"/>
+  <text x="${lx.toFixed(1)}" y="${(startPt[1]-14*s).toFixed(1)}" text-anchor="${anchor}" font-size="${(18*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">START</text>
+  <text x="${lx2.toFixed(1)}" y="${(finishPt[1]+30*s).toFixed(1)}" text-anchor="${anchor}" font-size="${(18*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">FINISH</text>
+  ${junctionMarkers}
+
+  <line x1="${MARGIN_X.toFixed(1)}" y1="${EL_BOTTOM.toFixed(1)}" x2="${(W-MARGIN_X).toFixed(1)}" y2="${EL_BOTTOM.toFixed(1)}" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.6"/>
+  <path d="${elArea}" fill="${pal.ink}" opacity="0.08"/>
+  <path d="${elLine}" fill="none" stroke="${pal.ink}" stroke-width="${(2*s).toFixed(2)}"/>
+  ${elTicks.map(x=>`<line x1="${x.toFixed(1)}" y1="${EL_TOP.toFixed(1)}" x2="${x.toFixed(1)}" y2="${(EL_BOTTOM+8*s).toFixed(1)}" stroke="${pal.mute}" stroke-width="${s.toFixed(2)}" opacity="0.6"/>`).join("\n")}
+  <text x="${MARGIN_X.toFixed(1)}" y="${(EL_TOP-14*s).toFixed(1)}" font-size="${(16*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">ELEVATION PROFILE</text>
+  <text x="${(W-MARGIN_X).toFixed(1)}" y="${(EL_TOP-14*s).toFixed(1)}" text-anchor="end" font-size="${(16*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">${Math.round(U.elev(maxElev)).toLocaleString()} ${U.elevShort} PEAK</text>
+
+  ${multiDay ? `<line x1="${MARGIN_X.toFixed(1)}" y1="${footerLineY.toFixed(1)}" x2="${(W-MARGIN_X).toFixed(1)}" y2="${footerLineY.toFixed(1)}" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.4"/>` : ''}
+  ${footerCols}
+  ${usedTerrainSource === 'dem' ? `<text x="${W/2}" y="${bottomY.toFixed(1)}" text-anchor="middle" font-size="${(9.5*s).toFixed(1)}" letter-spacing="${(1.2*s).toFixed(2)}" fill="${pal.mute}" opacity="0.75">ELEVATION DATA: MAPZEN TERRAIN TILES / AWS OPEN DATA \u2014 3DEP, SRTM, GMTED</text>` : ''}
+</svg>`;
+  return svg;
+}
+
+/* ---------------- download handlers ---------------- */
+document.getElementById('downloadSvg').addEventListener('click', ()=>{
+  const svgEl = posterWrap.querySelector('svg');
+  if(!svgEl) return;
+  const blob = new Blob([svgEl.outerHTML], {type:'image/svg+xml'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'route-poster.svg';
+  a.click();
+});
+
+document.getElementById('downloadPng').addEventListener('click', ()=>{
+  const svgEl = posterWrap.querySelector('svg');
+  if(!svgEl) return;
+  const svgData = new XMLSerializer().serializeToString(svgEl);
+  const svgBlob = new Blob([svgData], {type:'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(svgBlob);
+  const [vbW, vbH] = svgEl.getAttribute('viewBox').split(' ').slice(2).map(Number);
+  const img = new Image();
+  img.onload = ()=>{
+    const canvas = document.createElement('canvas');
+    canvas.width = vbW; canvas.height = vbH;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(blob=>{
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'route-poster.png';
+      a.click();
+    });
+  };
+  img.src = url;
+});
+</script>
+</body>
+</html>
