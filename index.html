@@ -4,7 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wandercarto — GPX to poster</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<!--
+  Vendored dependency, inlined so this stays a single self-contained file:
+  works offline, no CDN outage or supply-chain exposure, no third-party requests.
+    - pbf (BSD-3-Clause) https://github.com/mapbox/pbf
+-->
+<script>
+/* pbf v5 (BSD-3-Clause) */
+!function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"function"==typeof define&&define.amd?define(["exports"],e):e((t="undefined"!=typeof globalThis?globalThis:t||self).Pbf={})}(this,function(t){"use strict";const e=4294967296,i=1/e,s="undefined"==typeof TextDecoder?null:new TextDecoder("utf-8");function r(t,e,i){return i?4294967296*e+(t>>>0):4294967296*(e>>>0)+(t>>>0)}function h(t,e,i){const s=e<=16383?1:e<=2097151?2:e<=268435455?3:Math.floor(Math.log(e)/(7*Math.LN2));i.realloc(s),i.buf.copyWithin(t+s,t,i.pos)}function o(t,e){const i=t.length;let s=e.buf,r=e.pos,h=e.length;for(let o=0;o<i;o++){let i=t[o];if(i<0||r+10>h)e.pos=r,e.writeVarint(i),s=e.buf,r=e.pos,h=e.length;else{for(;i>127;)s[r++]=i%128|128,i=Math.floor(i/128);s[r++]=i}}e.pos=r}function n(t,e){for(let i=0;i<t.length;i++)e.writeSVarint(t[i])}function a(t,e){for(let i=0;i<t.length;i++)e.writeFloat(t[i])}function d(t,e){for(let i=0;i<t.length;i++)e.writeDouble(t[i])}function l(t,e){for(let i=0;i<t.length;i++)e.writeBoolean(t[i])}function u(t,e){for(let i=0;i<t.length;i++)e.writeFixed32(t[i])}function f(t,e){for(let i=0;i<t.length;i++)e.writeSFixed32(t[i])}function p(t,e){for(let i=0;i<t.length;i++)e.writeFixed64(t[i])}function w(t,e){for(let i=0;i<t.length;i++)e.writeSFixed64(t[i])}t.PbfReader=class{constructor(t){this.buf=ArrayBuffer.isView(t)?t:new Uint8Array(t),this.dataView=new DataView(this.buf.buffer,this.buf.byteOffset,this.buf.byteLength),this.pos=0,this.type=0,this._valueStart=-1,this.length=this.buf.length}readFields(t,e,i=this.length){let s;for(;s=this.nextField(i);)t(s,e,this);return e}readMessage(t,e){return this.readFields(t,e,this.readVarint()+this.pos)}readFixed32(){const t=this.dataView.getUint32(this.pos,!0);return this.pos+=4,t}readSFixed32(){const t=this.dataView.getInt32(this.pos,!0);return this.pos+=4,t}readFixed64(){const t=this.dataView.getUint32(this.pos,!0)+this.dataView.getUint32(this.pos+4,!0)*e;return this.pos+=8,t}readSFixed64(){const t=this.dataView.getUint32(this.pos,!0)+this.dataView.getInt32(this.pos+4,!0)*e;return this.pos+=8,t}readFloat(){const t=this.dataView.getFloat32(this.pos,!0);return this.pos+=4,t}readDouble(){const t=this.dataView.getFloat64(this.pos,!0);return this.pos+=8,t}readVarint(t){const e=this.buf,i=e[this.pos++];if(i<128)return i;let s,h=127&i;return s=e[this.pos++],h|=(127&s)<<7,s<128?h:(s=e[this.pos++],h|=(127&s)<<14,s<128?h:(s=e[this.pos++],h|=(127&s)<<21,s<128?h:(s=e[this.pos],h|=(15&s)<<28,function(t,e,i){const s=i.buf;let h,o;if(o=s[i.pos++],h=(112&o)>>4,o<128)return r(t,h,e);if(o=s[i.pos++],h|=(127&o)<<3,o<128)return r(t,h,e);if(o=s[i.pos++],h|=(127&o)<<10,o<128)return r(t,h,e);if(o=s[i.pos++],h|=(127&o)<<17,o<128)return r(t,h,e);if(o=s[i.pos++],h|=(127&o)<<24,o<128)return r(t,h,e);if(o=s[i.pos++],h|=(1&o)<<31,o<128)return r(t,h,e);throw new Error("Expected varint not more than 10 bytes")}(h,t,this))))}readSVarint(){const t=this.readVarint();return t%2==1?(t+1)/-2:t/2}readBoolean(){return Boolean(this.readVarint())}readString(){const t=this.readVarint()+this.pos,e=this.pos;return this.pos=t,t-e>=12&&s?s.decode(this.buf.subarray(e,t)):function(t,e,i){let s="",r=e;for(;r<i;){const e=t[r];let h,o,n,a=null,d=e>239?4:e>223?3:e>191?2:1;if(r+d>i)break;1===d?e<128&&(a=e):2===d?(h=t[r+1],128==(192&h)&&(a=(31&e)<<6|63&h,a<=127&&(a=null))):3===d?(h=t[r+1],o=t[r+2],128==(192&h)&&128==(192&o)&&(a=(15&e)<<12|(63&h)<<6|63&o,(a<=2047||a>=55296&&a<=57343)&&(a=null))):4===d&&(h=t[r+1],o=t[r+2],n=t[r+3],128==(192&h)&&128==(192&o)&&128==(192&n)&&(a=(15&e)<<18|(63&h)<<12|(63&o)<<6|63&n,(a<=65535||a>=1114112)&&(a=null))),null===a?(a=65533,d=1):a>65535&&(a-=65536,s+=String.fromCharCode(a>>>10&1023|55296),a=56320|1023&a),s+=String.fromCharCode(a),r+=d}return s}(this.buf,e,t)}readBytes(){const t=this.readVarint()+this.pos,e=this.buf.subarray(this.pos,t);return this.pos=t,e}readPackedVarint(t=[],e){const i=this.readPackedEnd();for(;this.pos<i;)t.push(this.readVarint(e));return t}readPackedSVarint(t=[]){const e=this.readPackedEnd();for(;this.pos<e;)t.push(this.readSVarint());return t}readPackedBoolean(t=[]){const e=this.readPackedEnd();for(;this.pos<e;)t.push(this.readBoolean());return t}readPackedFloat(t=[]){const e=this.readPackedEnd();for(;this.pos<e;)t.push(this.readFloat());return t}readPackedDouble(t=[]){const e=this.readPackedEnd();for(;this.pos<e;)t.push(this.readDouble());return t}readPackedFixed32(t=[]){const e=this.readPackedEnd();for(;this.pos<e;)t.push(this.readFixed32());return t}readPackedSFixed32(t=[]){const e=this.readPackedEnd();for(;this.pos<e;)t.push(this.readSFixed32());return t}readPackedFixed64(t=[]){const e=this.readPackedEnd();for(;this.pos<e;)t.push(this.readFixed64());return t}readPackedSFixed64(t=[]){const e=this.readPackedEnd();for(;this.pos<e;)t.push(this.readSFixed64());return t}readPackedEnd(){return 2===this.type?this.readVarint()+this.pos:this.pos+1}nextField(t=this.length){if(this.pos===this._valueStart&&this.skip(this.type),this.pos>=t)return 0;const e=this.readVarint();return this.type=7&e,this._valueStart=this.pos,e>>>3}skip(t){const e=7&t;if(0===e)for(;this.buf[this.pos++]>127;);else if(2===e)this.pos=this.readVarint()+this.pos;else if(5===e)this.pos+=4;else{if(1!==e)throw new Error(`Unimplemented type: ${e}`);this.pos+=8}}},t.PbfWriter=class{constructor(t=new Uint8Array(16)){this.buf=ArrayBuffer.isView(t)?t:new Uint8Array(t),this.dataView=new DataView(this.buf.buffer,this.buf.byteOffset,this.buf.byteLength),this.pos=0,this.length=this.buf.length}writeTag(t,e){this.writeVarint(t<<3|e)}realloc(t){let e=this.length||16;for(;e<this.pos+t;)e*=2;if(e!==this.length){const t=new Uint8Array(e);t.set(this.buf),this.buf=t,this.dataView=new DataView(t.buffer),this.length=e}}finish(){return this.length=this.pos,this.pos=0,this.buf.subarray(0,this.length)}writeFixed32(t){this.realloc(4),this.dataView.setInt32(this.pos,t,!0),this.pos+=4}writeSFixed32(t){this.realloc(4),this.dataView.setInt32(this.pos,t,!0),this.pos+=4}writeFixed64(t){this.realloc(8),this.dataView.setInt32(this.pos,-1&t,!0),this.dataView.setInt32(this.pos+4,Math.floor(t*i),!0),this.pos+=8}writeSFixed64(t){this.realloc(8),this.dataView.setInt32(this.pos,-1&t,!0),this.dataView.setInt32(this.pos+4,Math.floor(t*i),!0),this.pos+=8}writeVarint(t){if((t=+t||0)>=0&&t<128)return this.pos>=this.length&&this.realloc(1),void(this.buf[this.pos++]=t);t>268435455||t<0?function(t,e){let i,s;t>=0?(i=t%4294967296|0,s=t/4294967296|0):(i=~(-t%4294967296),s=~(-t/4294967296),4294967295^i?i=i+1|0:(i=0,s=s+1|0));if(t>=0x10000000000000000||t<-0x10000000000000000)throw new Error("Given varint doesn't fit into 10 bytes");e.realloc(10),function(t,e,i){i.buf[i.pos++]=127&t|128,t>>>=7,i.buf[i.pos++]=127&t|128,t>>>=7,i.buf[i.pos++]=127&t|128,t>>>=7,i.buf[i.pos++]=127&t|128,t>>>=7,i.buf[i.pos]=127&t}(i,0,e),function(t,e){const i=(7&t)<<4;if(e.buf[e.pos++]|=i|((t>>>=3)?128:0),!t)return;if(e.buf[e.pos++]=127&t|((t>>>=7)?128:0),!t)return;if(e.buf[e.pos++]=127&t|((t>>>=7)?128:0),!t)return;if(e.buf[e.pos++]=127&t|((t>>>=7)?128:0),!t)return;if(e.buf[e.pos++]=127&t|((t>>>=7)?128:0),!t)return;e.buf[e.pos++]=127&t}(s,e)}(t,this):(this.realloc(4),this.buf[this.pos++]=127&t|(t>127?128:0),t<=127||(this.buf[this.pos++]=127&(t>>>=7)|(t>127?128:0),t<=127||(this.buf[this.pos++]=127&(t>>>=7)|(t>127?128:0),t<=127||(this.buf[this.pos++]=t>>>7&127))))}writeSVarint(t){this.writeVarint(t<0?2*-t-1:2*t)}writeBoolean(t){this.writeVarint(+t)}writeString(t){t=String(t),this.realloc(4*t.length),this.pos++;const e=this.pos;this.pos=function(t,e,i){for(let s,r,h=0;h<e.length;h++){if(s=e.charCodeAt(h),s>55295&&s<57344){if(!r){s>56319||h+1===e.length?(t[i++]=239,t[i++]=191,t[i++]=189):r=s;continue}if(s<56320){t[i++]=239,t[i++]=191,t[i++]=189,r=s;continue}s=r-55296<<10|s-56320|65536,r=null}else r&&(t[i++]=239,t[i++]=191,t[i++]=189,r=null);s<128?t[i++]=s:(s<2048?t[i++]=s>>6|192:(s<65536?t[i++]=s>>12|224:(t[i++]=s>>18|240,t[i++]=s>>12&63|128),t[i++]=s>>6&63|128),t[i++]=63&s|128)}return i}(this.buf,t,this.pos);const i=this.pos-e;i>=128&&h(e,i,this),this.pos=e-1,this.writeVarint(i),this.pos+=i}writeFloat(t){this.realloc(4),this.dataView.setFloat32(this.pos,t,!0),this.pos+=4}writeDouble(t){this.realloc(8),this.dataView.setFloat64(this.pos,t,!0),this.pos+=8}writeBytes(t){const e=t.length;this.writeVarint(e),this.realloc(e),this.buf.set(t,this.pos),this.pos+=e}writeRawMessage(t,e){this.pos++;const i=this.pos;t(e,this);const s=this.pos-i;s>=128&&h(i,s,this),this.pos=i-1,this.writeVarint(s),this.pos+=s}writeMessage(t,e,i){this.writeTag(t,2),this.writeRawMessage(e,i)}writePackedVarint(t,e){e.length&&this.writeMessage(t,o,e)}writePackedSVarint(t,e){e.length&&this.writeMessage(t,n,e)}writePackedBoolean(t,e){e.length&&this.writeMessage(t,l,e)}writePackedFloat(t,e){e.length&&this.writeMessage(t,a,e)}writePackedDouble(t,e){e.length&&this.writeMessage(t,d,e)}writePackedFixed32(t,e){e.length&&this.writeMessage(t,u,e)}writePackedSFixed32(t,e){e.length&&this.writeMessage(t,f,e)}writePackedFixed64(t,e){e.length&&this.writeMessage(t,p,e)}writePackedSFixed64(t,e){e.length&&this.writeMessage(t,w,e)}writeBytesField(t,e){this.writeTag(t,2),this.writeBytes(e)}writeFixed32Field(t,e){this.writeTag(t,5),this.writeFixed32(e)}writeSFixed32Field(t,e){this.writeTag(t,5),this.writeSFixed32(e)}writeFixed64Field(t,e){this.writeTag(t,1),this.writeFixed64(e)}writeSFixed64Field(t,e){this.writeTag(t,1),this.writeSFixed64(e)}writeVarintField(t,e){this.writeTag(t,0),this.writeVarint(e)}writeSVarintField(t,e){this.writeTag(t,0),this.writeSVarint(e)}writeStringField(t,e){this.writeTag(t,2),this.writeString(e)}writeFloatField(t,e){this.writeTag(t,5),this.writeFloat(e)}writeDoubleField(t,e){this.writeTag(t,1),this.writeDouble(e)}writeBooleanField(t,e){this.writeVarintField(t,+e)}}});
+
+</script>
 <style>
   :root{
     --paper:#f4efe4; --ink:#20211f; --mute:#8c8577; --line:#d8d0bd;
@@ -85,27 +94,17 @@
     <div class="controls">
       <div class="field">
         <label>Title</label>
-        <input id="titleInput" type="text" placeholder="e.g. Olympic Peninsula">
+        <input id="titleInput" type="text" placeholder="e.g. Ridgeline Traverse">
       </div>
       <div class="field">
         <label>Subtitle</label>
-        <input id="subtitleInput" type="text" placeholder="e.g. A fortieth birthday loop">
+        <input id="subtitleInput" type="text" placeholder="e.g. Four days, self-supported">
       </div>
       <div class="field">
         <label>Palette</label>
         <select id="paletteSelect">
           <option value="ink">Monochrome / ink</option>
           <option value="days">Day-by-day colors</option>
-          <option value="film">Muted / film</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>Terrain</label>
-        <select id="terrainSelect">
-          <option value="hillshade">Hillshade — real DEM (needs network)</option>
-          <option value="live">Contour lines — real elevation data</option>
-          <option value="stylized">Contour lines — stylized (offline)</option>
-          <option value="none">No terrain</option>
         </select>
       </div>
       <div class="field">
@@ -117,6 +116,22 @@
           <option value="1:1">1:1 Square</option>
           <option value="3:2">3:2 Landscape</option>
           <option value="5:4">5:4 Landscape</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Map padding</label>
+        <select id="padSelect">
+          <option value="0.94">Tight</option>
+          <option value="0.78">Medium</option>
+          <option value="0.60">Wide context</option>
+          <option value="0.45">Very wide</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Water</label>
+        <select id="waterSelect">
+          <option value="auto">Auto (detect from route)</option>
+          <option value="off">No water shading</option>
         </select>
       </div>
       <div class="field">
@@ -285,22 +300,23 @@ async function buildPoster(){
   statusEl.className = ''; statusEl.textContent = 'Crunching GPS points…';
   posterPanel.classList.add('hidden');
 
-  const terrainMode = document.getElementById('terrainSelect').value;
   const palette = document.getElementById('paletteSelect').value;
   const titleOverride = document.getElementById('titleInput').value.trim();
   const subtitleOverride = document.getElementById('subtitleInput').value.trim();
   const [aspW, aspH] = document.getElementById('aspectSelect').value.split(':').map(Number);
   const aspect = { w: aspW, h: aspH };
   const unitSystem = document.getElementById('unitSelect').value;
+  const framePad = parseFloat(document.getElementById('padSelect').value);
+  const waterMode = document.getElementById('waterSelect').value;
 
   const proj = makeProjector(RIDES);
 
-  // a cached layer built for a different terrain mode — or a different aspect ratio, since
-  // DEM tiles are fetched to cover the map rectangle — must not be reused
-  const cacheKey = `${terrainMode}|${aspW}:${aspH}`;
+  // DEM tiles are fetched to cover the map rectangle, so a cached layer built for a
+  // different aspect ratio or padding must not be reused.
+  const cacheKey = `${aspW}:${aspH}|${framePad}`;
   if(GRID_MODE !== cacheKey){ GRID_CACHE = null; GRID_MODE = cacheKey; }
 
-  if(terrainMode === 'hillshade' && !(GRID_CACHE && GRID_CACHE.isTerrain)){
+  if(!(GRID_CACHE && GRID_CACHE.isTerrain)){
     let seconds = 0;
     const ticker = setInterval(()=>{ seconds++; }, 1000);
     statusEl.className = '';
@@ -311,7 +327,7 @@ async function buildPoster(){
 
     try{
       const tiles = await Promise.race([
-        fetchTerrainTiles(RIDES, mapRectBounds(RIDES, proj, aspect, 0.03), (d,t)=>{
+        fetchTerrainTiles(RIDES, mapRectBounds(RIDES, proj, aspect, 0.03, framePad), (d,t)=>{
           statusEl.textContent = `Fetching terrain tiles… ${d}/${t} tiles (${seconds}s elapsed)`;
         }),
         watchdog
@@ -322,163 +338,48 @@ async function buildPoster(){
       statusEl.textContent = `Hillshade from real DEM (zoom ${tiles.z}, Mapzen/AWS Open Data).`;
     }catch(err){
       clearInterval(ticker);
-      console.warn('terrain tile fetch failed, falling back', err);
-      GRID_CACHE = buildStylizedGrid(RIDES, proj);
+      console.warn('terrain tile fetch failed', err);
+      GRID_CACHE = null;   // no terrain rather than a poor substitute
       statusEl.className = 'fallback';
       let reason = 'network error';
       if(err && err.name === 'AbortError') reason = 'tile request timed out';
       if(err && err.name === 'WatchdogError') reason = 'no response after 25s';
       if(err && err.name === 'TaintError') reason = 'browser blocked reading the tiles (CORS)';
-      statusEl.textContent = `Terrain tiles unavailable (${reason}) — using stylized contours instead. Tip: opening this over a local server (run "python3 -m http.server" in this folder, then visit http://localhost:8000) usually fixes tile access.`;
+      statusEl.textContent = `Terrain unavailable (${reason}) — the poster is rendered without it. Tip: opening this over a local server (run "python3 -m http.server" in this folder, then visit http://localhost:8000) usually fixes tile access.`;
     }
-  } else if(terrainMode === 'live' && !GRID_CACHE){
-    let seconds = 0;
-    const ticker = setInterval(()=>{
-      seconds++;
-      statusEl.textContent = `Fetching real elevation data… (${seconds}s elapsed)`;
-    }, 1000);
-    statusEl.className = '';
-    statusEl.textContent = 'Fetching real elevation data… (0s elapsed)';
-
-    const WATCHDOG_MS = 15000;
-    const watchdogTimeout = new Promise((_, reject) => {
-      setTimeout(() => reject(Object.assign(new Error('watchdog timeout'), {name:'WatchdogError'})), WATCHDOG_MS);
-    });
-
-    try{
-      GRID_CACHE = await Promise.race([
-        fetchLiveGrid(RIDES, proj, (done,total)=>{
-          statusEl.textContent = `Fetching real elevation data… ${done}/${total} batches back (${seconds}s elapsed)`;
-        }),
-        watchdogTimeout
-      ]);
-      clearInterval(ticker);
-      statusEl.className = 'live';
-      statusEl.textContent = 'Using live elevation data (Open-Meteo / Copernicus DEM).';
-    }catch(err){
-      clearInterval(ticker);
-      console.warn('live fetch failed, falling back', err);
-      GRID_CACHE = buildStylizedGrid(RIDES, proj);
-      statusEl.className = 'fallback';
-      let reason = 'network/CORS error';
-      if(err && err.name === 'AbortError') reason = 'request timed out';
-      if(err && err.name === 'WatchdogError') reason = 'no response after 15s';
-      statusEl.textContent = `Live elevation fetch failed (${reason}) — using stylized contours instead. Tip: many public APIs (including this one) block requests from a local file:// page. Serving this file over a local server, e.g. running "python3 -m http.server" in its folder and opening it via http://localhost, often fixes it.`;
-    }
-  } else if(terrainMode === 'stylized'){
-    GRID_CACHE = buildStylizedGrid(RIDES, proj);
-    statusEl.className = 'fallback';
-    statusEl.textContent = 'Stylized contours (no network call made).';
-  } else if(terrainMode === 'none'){
-    GRID_CACHE = null;
-    statusEl.textContent = 'No terrain layer.';
-  } else if(GRID_CACHE && GRID_CACHE.live){
-    statusEl.className='live'; statusEl.textContent='Using live elevation data (cached from last fetch).';
-  } else if(GRID_CACHE){
-    statusEl.className='fallback'; statusEl.textContent='Using stylized contours (cached).';
+  } else {
+    statusEl.className = 'live';
+    statusEl.textContent = 'Hillshade from real DEM (cached from last fetch).';
   }
 
-  const svg = renderPosterSVG(RIDES, proj, GRID_CACHE, palette, titleOverride, subtitleOverride, aspect, unitSystem);
+  const svg = renderPosterSVG(RIDES, proj, GRID_CACHE, palette, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode);
   posterWrap.innerHTML = svg;
   posterPanel.classList.remove('hidden');
   buildBtn.disabled = false;
   posterPanel.scrollIntoView({behavior:'smooth', block:'start'});
 }
 
-/* ---------------- live elevation grid via Open-Meteo ---------------- */
-function fetchWithTimeout(url, ms){
-  const controller = new AbortController();
-  const timer = setTimeout(()=>controller.abort(), ms);
-  return fetch(url, {signal: controller.signal}).finally(()=>clearTimeout(timer));
-}
-
-async function fetchLiveGrid(rides, proj, onProgress){
-  const allPts = rides.flatMap(r=>r.points);
-  const lats = allPts.map(p=>p.lat), lons = allPts.map(p=>p.lon);
-  const [minLat, maxLat] = extent(lats);
-  const [minLon, maxLon] = extent(lons);
-  const padLat = (maxLat-minLat)*0.25 || 0.05;
-  const padLon = (maxLon-minLon)*0.25 || 0.05;
-  const extMinLat = minLat-padLat, extMaxLat = maxLat+padLat;
-  const extMinLon = minLon-padLon, extMaxLon = maxLon+padLon;
-
-  const nx = 26, ny = 34;
-  const coords = [];
-  for(let gy=0; gy<ny; gy++){
-    for(let gx=0; gx<nx; gx++){
-      const lat = extMaxLat - (gy/(ny-1))*(extMaxLat-extMinLat);
-      const lon = extMinLon + (gx/(nx-1))*(extMaxLon-extMinLon);
-      coords.push([lat,lon]);
-    }
-  }
-
-  const batchSize = 90;
-  const batches = [];
-  for(let i=0; i<coords.length; i+=batchSize) batches.push(coords.slice(i, i+batchSize));
-
-  let done = 0;
-  const REQUEST_TIMEOUT_MS = 8000;
-  const results = await Promise.all(batches.map(async (batch)=>{
-    const latStr = batch.map(c=>c[0].toFixed(5)).join(',');
-    const lonStr = batch.map(c=>c[1].toFixed(5)).join(',');
-    const url = `https://api.open-meteo.com/v1/elevation?latitude=${latStr}&longitude=${lonStr}`;
-    const resp = await fetchWithTimeout(url, REQUEST_TIMEOUT_MS);
-    if(!resp.ok) throw new Error('elevation API status ' + resp.status);
-    const data = await resp.json();
-    if(!data.elevation) throw new Error('no elevation field');
-    done++;
-    if(onProgress) onProgress(done, batches.length);
-    return data.elevation;
-  }));
-
-  const values = results.flat();
-  if(values.length !== coords.length || values.some(v=>v===null || v===undefined)){
-    throw new Error('incomplete grid');
-  }
-
-  return {
-    values, nx, ny,
-    extMinLat, extMaxLat, extMinLon, extMaxLon,
-    live: true
-  };
-}
-
-/* ---------------- stylized fallback grid ---------------- */
-function buildStylizedGrid(rides, proj){
-  const allPts = rides.flatMap(r=>r.points);
-  const lats = allPts.map(p=>p.lat), lons = allPts.map(p=>p.lon);
-  const [minLat, maxLat] = extent(lats);
-  const [minLon, maxLon] = extent(lons);
-  const padLat = (maxLat-minLat)*0.25 || 0.05;
-  const padLon = (maxLon-minLon)*0.25 || 0.05;
-  const extMinLat = minLat-padLat, extMaxLat = maxLat+padLat;
-  const extMinLon = minLon-padLon, extMaxLon = maxLon+padLon;
-  const nx = 26, ny = 34;
-
-  // cheap deterministic smooth pseudo-terrain (sum of sines), no external calls
-  function noise(x,y){
-    return Math.sin(x*1.7+y*0.6)*0.5 + Math.sin(x*0.5-y*1.3+2.1)*0.35 + Math.sin(x*3.1+y*2.7+1.0)*0.15;
-  }
-  const values = [];
-  for(let gy=0; gy<ny; gy++){
-    for(let gx=0; gx<nx; gx++){
-      const u = gx/(nx-1)*6, v = gy/(ny-1)*6;
-      const ridge = -(((gx-nx*0.42)/(nx*0.55))**2 + ((gy-ny*0.5)/(ny*0.55))**2)*3.2;
-      values.push(noise(u,v) + ridge);
-    }
-  }
-  return { values, nx, ny, extMinLat, extMaxLat, extMinLon, extMaxLon, live:false };
-}
-
 /* ---------------- palette definitions ---------------- */
+/* ColorBrewer Spectral, inlined rather than pulling in all of d3-scale-chromatic. */
+const SPECTRAL = ['#9e0142','#d53e4f','#f46d43','#fdae61','#fee08b','#ffffbf',
+                  '#e6f598','#abdda4','#66c2a5','#3288bd','#5e4fa2'];
+function spectral(t){
+  t = t<0?0:(t>1?1:t);
+  const x = t*(SPECTRAL.length-1);
+  const i = Math.min(SPECTRAL.length-2, Math.floor(x));
+  const f = x-i;
+  const hex = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  const a = hex(SPECTRAL[i]), b = hex(SPECTRAL[i+1]);
+  const c = a.map((v,k)=> Math.round(v + (b[k]-v)*f));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+}
+
 function getPalette(name){
   const palettes = {
     ink:   { paper:'#f4efe4', ink:'#20211f', mute:'#8c8577', contour:'#20211f',
              dayColor:(i,n)=>'#20211f' },
-    film:  { paper:'#efe9dd', ink:'#33342d', mute:'#8a8371', contour:'#33342d',
-             dayColor:(i,n)=>'#33342d' },
     days:  { paper:'#f4efe4', ink:'#20211f', mute:'#8c8577', contour:'#8c8577',
-             dayColor:(i,n)=> d3.interpolateSpectral(0.15 + 0.7*(i/(Math.max(n-1,1)))) }
+             dayColor:(i,n)=> spectral(0.15 + 0.7*(i/(Math.max(n-1,1)))) }
   };
   return palettes[name] || palettes.ink;
 }
@@ -623,7 +524,12 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
   //    averaging at a coastline, where a mixed pixel's mean lands arbitrarily.
   const elevRaw = new Float32Array(OW*OH);
   const waterFrac = new Float32Array(OW*OH);
+  // Sea level is NOT a constant. In the Netherlands (and other polder/depression regions)
+  // dry land sits several metres below sea level, so a fixed 0.5 m threshold paints the
+  // whole country as ocean. The caller derives this from the route's own elevations —
+  // the track is standing proof of where land is.
   const SEA = o.seaLevel ?? 0.5;
+  const waterOff = o.waterMode === 'off';
   let anyLand = false;
   for(let oy=0; oy<OH; oy++){
     for(let ox=0; ox<OW; ox++){
@@ -640,7 +546,7 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
       const i = oy*OW+ox;
       elevRaw[i]  = n===0 ? NaN : sum/n;
       waterFrac[i]= n===0 ? 0    : wv/n;
-      if(n>0 && elevRaw[i] > 0) anyLand = true;
+      if(n>0 && elevRaw[i] > SEA) anyLand = true;
     }
   }
   if(!anyLand) throw new Error('terrain sample produced no land');
@@ -652,8 +558,8 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
   for(let i=0;i<OW*OH;i++){
     const v = elevRaw[i];
     if(Number.isNaN(v)){ elevC[i] = NaN; continue; }
-    isWater[i] = waterFrac[i] >= 0.5 ? 1 : 0;
-    elevC[i] = v < 0 ? 0 : v;
+    isWater[i] = (!waterOff && waterFrac[i] >= 0.5) ? 1 : 0;
+    elevC[i] = v < SEA ? SEA : v;   // the water surface is flat at sea level
   }
 
   // 2a) The DEM fills voids over water with small positive values, which an absolute
@@ -661,7 +567,7 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
   //     Real sea is dead flat, so flood-fill outward from known water through connected
   //     flat, near-sea-level ground. A flood fill (rather than a few dilation passes)
   //     absorbs blotches of any size; requiring connectivity keeps inland flats as land.
-  const NEAR_SEA = o.nearSeaLevel ?? 8;    // metres
+  const NEAR_SEA = o.nearSeaLevel ?? (SEA + 7.5);   // metres, relative to actual sea level
   const FLAT_RELIEF = o.flatRelief ?? 3;   // metres of relief across a 3x3 neighbourhood
 
   const relief = new Float32Array(OW*OH);
@@ -681,7 +587,12 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
 
   const queue = new Int32Array(OW*OH);
   let qHead = 0, qTail = 0;
-  for(let i=0;i<OW*OH;i++) if(isWater[i]) queue[qTail++] = i;
+  // Remember which pixels were water on elevation evidence alone. Those are real water and
+  // must never be handed back to land — only flood-fill *additions* are reconsidered below.
+  const seedWater = new Uint8Array(OW*OH);
+  if(!waterOff){
+    for(let i=0;i<OW*OH;i++) if(isWater[i]){ seedWater[i]=1; queue[qTail++] = i; }
+  }
   while(qHead < qTail){
     const i = queue[qHead++];
     const x = i % OW, y = (i - x)/OW;
@@ -699,7 +610,62 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
     }
   }
 
-  // 2b) speckle removal: flip pixels that disagree with almost all their neighbours
+  // 2c) Flat land adjacent to the sea (Dutch polders, reclaimed land) is genuinely below
+  //     sea level and connected to the ocean, so the flood fill above will happily swallow
+  //     an entire country. The decisive evidence is the GPX track: the rider was on land.
+  //     Label connected water regions and hand back any region the route substantially
+  //     runs through. A short ferry crossing stays water; a whole ride through polders
+  //     does not.
+  const routePx = o.routePixels || [];
+  if(routePx.length && !waterOff){
+    const routeIdx = [];
+    for(const [sx,sy] of routePx){
+      const ox = Math.floor((sx-rectX)/rectW*OW);
+      const oy = Math.floor((sy-rectY)/rectH*OH);
+      if(ox<0||oy<0||ox>=OW||oy>=OH) continue;
+      routeIdx.push(oy*OW+ox);
+    }
+    if(routeIdx.length){
+      const label = new Int32Array(OW*OH).fill(-1);
+      const compRouteHits = [];
+      const compCells = [];
+      let nComp = 0;
+      const stack = new Int32Array(OW*OH);
+      const isAdded = i => isWater[i] && !seedWater[i];
+      for(let start=0; start<OW*OH; start++){
+        if(!isAdded(start) || label[start] !== -1) continue;
+        const id = nComp++;
+        let sp = 0, cells = 0;
+        stack[sp++] = start; label[start] = id;
+        while(sp>0){
+          const i = stack[--sp];
+          cells++;
+          const x = i % OW, y = (i-x)/OW;
+          for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+            if(dx===0&&dy===0) continue;
+            const xx=x+dx, yy=y+dy;
+            if(xx<0||yy<0||xx>=OW||yy>=OH) continue;
+            const j = yy*OW+xx;
+            if(isAdded(j) && label[j]===-1){ label[j]=id; stack[sp++]=j; }
+          }
+        }
+        compRouteHits[id] = 0;
+        compCells[id] = cells;
+      }
+      for(const ri of routeIdx){
+        const id = label[ri];
+        if(id >= 0) compRouteHits[id]++;
+      }
+      const MIN_FRAC = o.routeLandFrac ?? 0.10;
+      for(let id=0; id<nComp; id++){
+        if(compRouteHits[id] / routeIdx.length >= MIN_FRAC){
+          for(let i=0;i<OW*OH;i++) if(label[i]===id) isWater[i] = 0;
+        }
+      }
+    }
+  }
+
+  // 2d) speckle removal: flip pixels that disagree with almost all their neighbours
   for(let pass=0; pass<2; pass++){
     const flips = [];
     for(let y=0;y<OH;y++){
@@ -744,7 +710,12 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
   }
 
   // 2) hillshade (standard slope/aspect illumination)
-  const azimuth = (o.azimuth ?? 315) * Math.PI/180;
+  // Azimuth is given as a compass bearing (clockwise from north). The illumination formula
+  // below works in math convention (counter-clockwise from east), so it must be converted:
+  // math = (360 - compass + 90) mod 360. Skipping this conversion lights the terrain from
+  // the opposite quadrant and inverts the relief — hills read as valleys.
+  const azimuthDeg = o.azimuth ?? 315;                       // 315 = NW, the cartographic default
+  const azimuth = (((360 - azimuthDeg + 90) % 360 + 360) % 360) * Math.PI/180;
   const zenith  = (90 - (o.altitude ?? 45)) * Math.PI/180;
   const zFactor = o.zFactor ?? 1.0;
   // metres per output pixel — spanMetres measures the rect's width, so scale by OW
@@ -848,7 +819,7 @@ function computeCanvasSize(aspect){
   return {W,H};
 }
 
-function computeLayout(rides, proj, aspect){
+function computeLayout(rides, proj, aspect, framePad){
   const {W,H} = computeCanvasSize(aspect);
   const s = Math.min(W,H)/REF_W;
   const MARGIN_X = W*0.0875;
@@ -863,7 +834,10 @@ function computeLayout(rides, proj, aspect){
   const [minx, maxx] = extent(projPts.map(p=>p[0]));
   const [miny, maxy] = extent(projPts.map(p=>p[1]));
   const geo_w = maxx-minx, geo_h = maxy-miny;
-  const scale = Math.min(map_w/geo_w, map_h/geo_h) * 0.94;
+  // framePad: how much the route is inset from the map edge. Smaller = more surrounding
+  // terrain visible, placing the route in wider geographic context.
+  const fill = framePad ?? 0.94;
+  const scale = Math.min(map_w/geo_w, map_h/geo_h) * fill;
   const off_x = MARGIN_X + (map_w - geo_w*scale)/2;
   const off_y = MAP_TOP + (map_h - geo_h*scale)/2;
 
@@ -883,8 +857,8 @@ function computeLayout(rides, proj, aspect){
 
 /* Geographic bounds of the *drawn map rectangle* (not just the route) — terrain must
    cover this whole area or the poster shows blank bands at the edges. */
-function mapRectBounds(rides, proj, aspect, padFrac){
-  const L = computeLayout(rides, proj, aspect);
+function mapRectBounds(rides, proj, aspect, padFrac, framePad){
+  const L = computeLayout(rides, proj, aspect, framePad);
   const corners = [
     L.invProject(L.MARGIN_X, L.MAP_TOP),
     L.invProject(L.MARGIN_X + L.map_w, L.MAP_TOP),
@@ -900,9 +874,9 @@ function mapRectBounds(rides, proj, aspect, padFrac){
 }
 
 /* ---------------- main SVG renderer ---------------- */
-function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitleOverride, aspect, unitSystem){
+function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode){
   const U = makeUnits(unitSystem);
-  const L = computeLayout(rides, proj, aspect);
+  const L = computeLayout(rides, proj, aspect, framePad);
   const {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y} = L;
   const {toSvg, toSvgProj, invProject} = L;
   const pal = getPalette(paletteName);
@@ -986,8 +960,7 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
   const title = (titleOverride || 'YOUR ROUTE').toUpperCase();
   const subtitle = subtitleOverride ? subtitleOverride.toUpperCase() : '';
 
-  /* ---- terrain layer: hillshade raster, or contour lines ---- */
-  let contourSvg = '';
+  /* ---- terrain layer: hillshade raster from the DEM ---- */
   let hillshadeSvg = '';
   let usedTerrainSource = null;
 
@@ -997,40 +970,22 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
     const [swLat, swLon] = invProject(MARGIN_X, MAP_BOTTOM);
     const [seLat, seLon] = invProject(MARGIN_X+map_w, MAP_BOTTOM);
     const spanMetres = haversine(swLat, swLon, seLat, seLon) || 60000;
+
+    // Derive sea level from the route itself. If the track runs below 0 m — polders,
+    // Death Valley, the Dead Sea — then land demonstrably exists down there, so push the
+    // waterline below the lowest point the rider actually reached. Mountain routes keep
+    // the default and behave exactly as before.
+    const routeMin = minElev;
+    const seaLevel = (routeMin < 2) ? (routeMin - 2) : 0.5;
+
     const uri = buildHillshadeDataURI(grid, invProject, MARGIN_X, MAP_TOP, map_w, map_h, {
       azimuth:315, altitude:45, strength:0.62, waterAlpha:0.10,
       shadowRGB:[32,33,31], waterRGB:[32,33,31],
-      spanMetres
+      spanMetres, seaLevel, waterMode,
+      routePixels: dayPaths.flat()
     });
-    hillshadeSvg = `<image x="${MARGIN_X.toFixed(1)}" y="${MAP_TOP.toFixed(1)}" width="${map_w.toFixed(1)}" height="${map_h.toFixed(1)}" href="${uri}" preserveAspectRatio="none"/>`;
+    hillshadeSvg = `<image x="${MARGIN_X.toFixed(1)}" y="${MAP_TOP.toFixed(1)}" width="${map_w.toFixed(1)}" height="${map_h.toFixed(1)}" href="${uri}" xlink:href="${uri}" preserveAspectRatio="none"/>`;
     usedTerrainSource = 'dem';
-  } else if(grid){
-    const [gmin,gmax] = extent(grid.values);
-    const thresholds = d3.range(1,10).map(i => gmin + (gmax-gmin)*i/10);
-    const contourGen = d3.contours().size([grid.nx, grid.ny]).thresholds(thresholds);
-    const contours = contourGen(grid.values);
-
-    function gridToSvg(gx, gy){
-      const lat = grid.extMaxLat - (gy/(grid.ny-1))*(grid.extMaxLat-grid.extMinLat);
-      const lon = grid.extMinLon + (gx/(grid.nx-1))*(grid.extMaxLon-grid.extMinLon);
-      return toSvg(lat, lon);
-    }
-
-    const parts = [];
-    contours.forEach((feature, li)=>{
-      const isIndex = li % 3 === 0;
-      const w = (isIndex ? 1.1 : 0.6) * s;
-      const op = isIndex ? 0.32 : 0.15;
-      let d = '';
-      feature.coordinates.forEach(polygon=>{
-        polygon.forEach(ring=>{
-          const svgRing = ring.map(([gx,gy])=>gridToSvg(gx,gy));
-          d += 'M ' + svgRing.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L ') + ' Z ';
-        });
-      });
-      parts.push(`<path d="${d}" fill="none" stroke="${pal.contour}" stroke-width="${w.toFixed(2)}" opacity="${op}"/>`);
-    });
-    contourSvg = parts.join('\n');
   }
 
   /* ---- route paths ---- */
@@ -1067,7 +1022,7 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
   const inset1 = 60*s, inset2 = 72*s;
 
   const svg = `
-<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" xmlns="http://www.w3.org/2000/svg" font-family="Georgia, 'Times New Roman', serif">
+<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" font-family="Georgia, 'Times New Roman', serif">
   <rect x="0" y="0" width="${W.toFixed(1)}" height="${H.toFixed(1)}" fill="${pal.paper}"/>
   <rect x="${inset1.toFixed(1)}" y="${inset1.toFixed(1)}" width="${(W-2*inset1).toFixed(1)}" height="${(H-2*inset1).toFixed(1)}" fill="none" stroke="${pal.ink}" stroke-width="${(1.5*s).toFixed(2)}" opacity="0.5"/>
   <rect x="${inset2.toFixed(1)}" y="${inset2.toFixed(1)}" width="${(W-2*inset2).toFixed(1)}" height="${(H-2*inset2).toFixed(1)}" fill="none" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.3"/>
@@ -1079,7 +1034,7 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
   <text x="${W/2}" y="${statsY.toFixed(1)}" text-anchor="middle" font-size="${(22*s).toFixed(1)}" letter-spacing="${(4*s).toFixed(2)}" fill="${pal.mute}">${headStats}</text>
 
   <clipPath id="mapClip"><rect x="${MARGIN_X.toFixed(1)}" y="${MAP_TOP.toFixed(1)}" width="${map_w.toFixed(1)}" height="${map_h.toFixed(1)}"/></clipPath>
-  <g clip-path="url(#mapClip)">${hillshadeSvg}${contourSvg}</g>
+  <g clip-path="url(#mapClip)">${hillshadeSvg}</g>
 
   ${routeParts}
   <circle cx="${startPt[0].toFixed(1)}" cy="${startPt[1].toFixed(1)}" r="${(9*s).toFixed(2)}" fill="${pal.paper}" stroke="${pal.ink}" stroke-width="${(2.5*s).toFixed(2)}"/>
