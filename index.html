@@ -157,6 +157,11 @@
     <div id="posterWrap"></div>
     <div class="actions">
       <button id="downloadSvg">Download SVG</button>
+      <select id="pngSizeSelect" title="PNG export size">
+        <option value="2400">PNG · screen</option>
+        <option value="4000" selected>PNG · print (4000 px)</option>
+        <option value="6000">PNG · large (6000 px)</option>
+      </select>
       <button id="downloadPng" class="ghost">Download PNG</button>
       <button id="rebuild" class="ghost">Rebuild with current settings</button>
     </div>
@@ -299,6 +304,7 @@ let RIDES = [];
 let GRID_CACHE = null; // {values, nx, ny, ...} for contours, or {data,width,height,z,...} for DEM tiles
 let GRID_MODE = null;  // which aspect/padding GRID_CACHE was built for
 let VEC_CACHE = null;  // decoded OpenFreeMap vector tiles (roads, water, places)
+let LAST_RENDER = null; // args behind the on-screen poster, so PNG export can re-render it sharper
 
 /* ---------------- UI wiring ---------------- */
 const dropEl = document.getElementById('drop');
@@ -444,6 +450,8 @@ async function buildPoster(){
   }
   const vecForRender = VEC_CACHE;
 
+  LAST_RENDER = { rides: RIDES, proj, grid: GRID_CACHE, palette, titleOverride, subtitleOverride,
+                  aspect, unitSystem, framePad, waterMode, vec: vecForRender, elevMode, roadMode };
   const svg = renderPosterSVG(RIDES, proj, GRID_CACHE, palette, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode, vecForRender, elevMode, roadMode);
   posterWrap.innerHTML = svg;
   posterPanel.classList.remove('hidden');
@@ -912,8 +920,11 @@ function rasterizePolygons(rings, rectX, rectY, rectW, rectH, OW, OH){
    invProject(sx,sy) -> [lat,lon] so the raster aligns exactly with the drawn route. */
 function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
   const o = opts || {};
-  const maxDim = 1500;
-  const sc = Math.min(1, maxDim/Math.max(rectW, rectH));
+  // Default caps the raster at 1500 px and never above 1:1 with SVG units. A large PNG
+  // export raises this so the terrain is generated at output resolution rather than being
+  // upscaled next to crisp vector text.
+  const maxDim = o.maxDim ?? Math.min(1500, Math.max(rectW, rectH));
+  const sc = maxDim/Math.max(rectW, rectH);
   const OW = Math.max(2, Math.round(rectW*sc)), OH = Math.max(2, Math.round(rectH*sc));
 
   const spanMetres = o.spanMetres ?? 60000;
@@ -1321,7 +1332,7 @@ function mapRectBounds(rides, proj, aspect, padFrac, framePad, elevMode){
 }
 
 /* ---------------- main SVG renderer ---------------- */
-function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode, vec, elevMode, roadMode){
+function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode, vec, elevMode, roadMode, renderOpts){
   const U = makeUnits(unitSystem);
   const L = computeLayout(rides, proj, aspect, framePad, elevMode);
   const {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y} = L;
@@ -1490,7 +1501,11 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
       shadowRGB:[32,33,31], waterRGB:[32,33,31],
       spanMetres, seaLevel, waterMode,
       routePixels: dayPaths.flat(),
-      waterPolysSvg: waterPolysSvg
+      waterPolysSvg: waterPolysSvg,
+      // size the terrain raster to the pixels it will actually occupy in the export
+      maxDim: (renderOpts && renderOpts.outputScale)
+        ? Math.min(3200, Math.round(Math.max(map_w, map_h) * renderOpts.outputScale))
+        : undefined
     });
     hillshadeSvg = `<image x="${MARGIN_X.toFixed(1)}" y="${MAP_TOP.toFixed(1)}" width="${map_w.toFixed(1)}" height="${map_h.toFixed(1)}" href="${uri}" xlink:href="${uri}" preserveAspectRatio="none"/>`;
     usedTerrainSource = 'dem';
@@ -1610,23 +1625,42 @@ document.getElementById('downloadSvg').addEventListener('click', ()=>{
 });
 
 document.getElementById('downloadPng').addEventListener('click', ()=>{
-  const svgEl = posterWrap.querySelector('svg');
-  if(!svgEl) return;
-  const svgData = new XMLSerializer().serializeToString(svgEl);
+  const onScreen = posterWrap.querySelector('svg');
+  if(!onScreen) return;
+  const btn = document.getElementById('downloadPng');
+  const targetLong = parseInt(document.getElementById('pngSizeSelect').value, 10);
+  const [vbW0, vbH0] = onScreen.getAttribute('viewBox').split(' ').slice(2).map(Number);
+  const scale = targetLong / Math.max(vbW0, vbH0);
+
+  // The hillshade is a raster baked into the SVG; blowing it up alongside crisp vector
+  // text looks soft. For large exports, re-render the terrain to match the output size.
+  let svgData;
+  if(scale > 1.05 && LAST_RENDER){
+    const wasLabel = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Rendering…';
+    const r = LAST_RENDER;
+    svgData = renderPosterSVG(r.rides, r.proj, r.grid, r.palette, r.titleOverride, r.subtitleOverride,
+      r.aspect, r.unitSystem, r.framePad, r.waterMode, r.vec, r.elevMode, r.roadMode,
+      { outputScale: scale });
+    btn.disabled = false; btn.textContent = wasLabel;
+  } else {
+    svgData = new XMLSerializer().serializeToString(onScreen);
+  }
+
   const svgBlob = new Blob([svgData], {type:'image/svg+xml;charset=utf-8'});
   const url = URL.createObjectURL(svgBlob);
-  const [vbW, vbH] = svgEl.getAttribute('viewBox').split(' ').slice(2).map(Number);
   const img = new Image();
   img.onload = ()=>{
     const canvas = document.createElement('canvas');
-    canvas.width = vbW; canvas.height = vbH;
+    canvas.width = Math.round(vbW0 * scale);
+    canvas.height = Math.round(vbH0 * scale);
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     URL.revokeObjectURL(url);
     canvas.toBlob(blob=>{
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'route-poster.png';
+      a.download = `route-poster-${canvas.width}x${canvas.height}.png`;
       a.click();
     });
   };
