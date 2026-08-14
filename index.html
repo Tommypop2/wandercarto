@@ -101,13 +101,6 @@
         <input id="subtitleInput" type="text" placeholder="e.g. Four days, self-supported">
       </div>
       <div class="field">
-        <label>Palette</label>
-        <select id="paletteSelect">
-          <option value="ink">Monochrome / ink</option>
-          <option value="days">Day-by-day colors</option>
-        </select>
-      </div>
-      <div class="field">
         <label>Aspect ratio</label>
         <select id="aspectSelect">
           <option value="2:3">2:3 Portrait (default)</option>
@@ -123,15 +116,29 @@
         <select id="padSelect">
           <option value="0.94">Tight</option>
           <option value="0.78">Medium</option>
-          <option value="0.60">Wide context</option>
+          <option value="0.60">Wide</option>
           <option value="0.45">Very wide</option>
         </select>
       </div>
       <div class="field">
-        <label>Water</label>
-        <select id="waterSelect">
-          <option value="auto">Auto (detect from route)</option>
-          <option value="off">No water shading</option>
+        <label>Route colour</label>
+        <select id="paletteSelect">
+          <option value="ink">Monochrome / ink</option>
+          <option value="days">Day-by-day colours</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Roads &amp; places</label>
+        <select id="roadSelect">
+          <option value="on">Show (detail scales to trip size)</option>
+          <option value="off">Hide</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Elevation profile</label>
+        <select id="elevSelect">
+          <option value="auto">Show (if the GPX has elevation)</option>
+          <option value="off">Hide</option>
         </select>
       </div>
       <div class="field">
@@ -158,22 +165,54 @@
 
 <script>
 /* ---------------- GPX parsing ---------------- */
+/* Distance beyond which consecutive points are treated as a recording gap rather
+   than travel — a dropout or a paused-and-moved recording, not a straight-line ride. */
+const GAP_METRES = 5000;
+
 function parseGPX(text, filename){
   const doc = new DOMParser().parseFromString(text, "application/xml");
-  const trkpts = Array.from(doc.querySelectorAll("trkpt"));
-  const points = trkpts.map(pt => {
+  let sawElevation = false;
+
+  const readPt = pt => {
     const eleEl = pt.querySelector("ele");
     const timeEl = pt.querySelector("time");
+    const eleTxt = eleEl ? parseFloat(eleEl.textContent) : NaN;
+    if(eleEl && Number.isFinite(eleTxt)) sawElevation = true;
     return {
       lat: parseFloat(pt.getAttribute("lat")),
       lon: parseFloat(pt.getAttribute("lon")),
-      ele: eleEl ? parseFloat(eleEl.textContent) : 0,
+      ele: Number.isFinite(eleTxt) ? eleTxt : 0,
       time: timeEl ? timeEl.textContent : null
     };
-  });
+  };
+
+  // Keep <trkseg> boundaries. Flattening them draws a straight line across every
+  // pause or dropout and adds that phantom distance to the totals.
+  let segments = Array.from(doc.querySelectorAll("trkseg"))
+    .map(seg => Array.from(seg.querySelectorAll("trkpt")).map(readPt))
+    .filter(seg => seg.length > 0);
+
+  if(!segments.length){
+    const all = Array.from(doc.querySelectorAll("trkpt")).map(readPt);
+    if(all.length) segments = [all];
+  }
+
+  // Split further on implausible jumps inside a segment (GPS dropout).
+  const split = [];
+  for(const seg of segments){
+    let cur = [seg[0]];
+    for(let i=1;i<seg.length;i++){
+      const d = haversine(seg[i-1].lat, seg[i-1].lon, seg[i].lat, seg[i].lon);
+      if(d > GAP_METRES){ if(cur.length) split.push(cur); cur = [seg[i]]; }
+      else cur.push(seg[i]);
+    }
+    if(cur.length) split.push(cur);
+  }
+
+  const points = split.flat();
   const nameEl = doc.querySelector("trk > name");
   const name = nameEl ? nameEl.textContent.trim() : filename.replace(/\.gpx$/i, "");
-  return { name, filename, points };
+  return { name, filename, points, segments: split, hasElevation: sawElevation };
 }
 
 function haversine(lat1, lon1, lat2, lon2){
@@ -186,11 +225,13 @@ function haversine(lat1, lon1, lat2, lon2){
 
 function rideStats(ride){
   let dist = 0, gain = 0, loss = 0;
-  const pts = ride.points;
-  for(let i=1;i<pts.length;i++){
-    dist += haversine(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
-    const de = pts[i].ele - pts[i-1].ele;
-    if(de>0) gain += de; else loss += -de;
+  // Per segment, so gaps between segments contribute no distance or climb.
+  for(const pts of (ride.segments || [ride.points])){
+    for(let i=1;i<pts.length;i++){
+      dist += haversine(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+      const de = pts[i].ele - pts[i-1].ele;
+      if(de>0) gain += de; else loss += -de;
+    }
   }
   return { distanceKm: dist/1000, gainM: gain, lossM: loss };
 }
@@ -230,14 +271,34 @@ function makeProjector(rides){
   const allPts = rides.flatMap(r=>r.points);
   const meanLat = allPts.reduce((s,p)=>s+p.lat,0)/allPts.length;
   const cosLat = Math.cos(meanLat*Math.PI/180);
-  const project = (lat,lon)=>[lon*cosLat, lat];
-  return { project, cosLat, meanLat };
+
+  // A route crossing the antimeridian has longitudes near +180 and -180, so a naive
+  // min/max spans ~360 degrees and the whole layout collapses. Detect that and work in
+  // a continuous frame where the eastern side keeps going past +180. Longitudes are
+  // wrapped back into [-180,180] only where they must be: building tile URLs.
+  const lons = allPts.map(p=>p.lon);
+  const [rawMin, rawMax] = extent(lons);
+  let crosses = false;
+  if(rawMax - rawMin > 180){
+    // is the route genuinely global, or just straddling the seam?
+    const shifted = lons.map(l => l < 0 ? l+360 : l);
+    const [sMin, sMax] = extent(shifted);
+    if((sMax - sMin) < (rawMax - rawMin)) crosses = true;
+  }
+  const unwrap = lon => (crosses && lon < 0) ? lon + 360 : lon;
+
+  const project = (lat,lon)=>[unwrap(lon)*cosLat, lat];
+  return { project, cosLat, meanLat, unwrap, crossesAntimeridian: crosses };
 }
+
+/* Wrap any longitude back into [-180,180). */
+function normLon(lon){ return ((lon + 180) % 360 + 360) % 360 - 180; }
 
 /* ---------------- state ---------------- */
 let RIDES = [];
 let GRID_CACHE = null; // {values, nx, ny, ...} for contours, or {data,width,height,z,...} for DEM tiles
-let GRID_MODE = null;  // which terrain mode GRID_CACHE was built for
+let GRID_MODE = null;  // which aspect/padding GRID_CACHE was built for
+let VEC_CACHE = null;  // decoded OpenFreeMap vector tiles (roads, water, places)
 
 /* ---------------- UI wiring ---------------- */
 const dropEl = document.getElementById('drop');
@@ -307,14 +368,16 @@ async function buildPoster(){
   const aspect = { w: aspW, h: aspH };
   const unitSystem = document.getElementById('unitSelect').value;
   const framePad = parseFloat(document.getElementById('padSelect').value);
-  const waterMode = document.getElementById('waterSelect').value;
+  const waterMode = 'auto';   // water is always drawn; it is part of the map, not an option
+  const roadMode = document.getElementById('roadSelect').value;
+  const elevMode = document.getElementById('elevSelect').value;
 
   const proj = makeProjector(RIDES);
 
   // DEM tiles are fetched to cover the map rectangle, so a cached layer built for a
   // different aspect ratio or padding must not be reused.
-  const cacheKey = `${aspW}:${aspH}|${framePad}`;
-  if(GRID_MODE !== cacheKey){ GRID_CACHE = null; GRID_MODE = cacheKey; }
+  const cacheKey = `${aspW}:${aspH}|${framePad}|${elevMode}`;
+  if(GRID_MODE !== cacheKey){ GRID_CACHE = null; VEC_CACHE = null; GRID_MODE = cacheKey; }
 
   if(!(GRID_CACHE && GRID_CACHE.isTerrain)){
     let seconds = 0;
@@ -327,7 +390,7 @@ async function buildPoster(){
 
     try{
       const tiles = await Promise.race([
-        fetchTerrainTiles(RIDES, mapRectBounds(RIDES, proj, aspect, 0.03, framePad), (d,t)=>{
+        fetchTerrainTiles(RIDES, mapRectBounds(RIDES, proj, aspect, 0.03, framePad, elevMode), (d,t)=>{
           statusEl.textContent = `Fetching terrain tiles… ${d}/${t} tiles (${seconds}s elapsed)`;
         }),
         watchdog
@@ -352,7 +415,36 @@ async function buildPoster(){
     statusEl.textContent = 'Hillshade from real DEM (cached from last fetch).';
   }
 
-  const svg = renderPosterSVG(RIDES, proj, GRID_CACHE, palette, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode);
+  // Vector tiles: roads, place labels, and authoritative water polygons.
+  // Water polygons live in the same vector tiles as roads, so these are always fetched —
+  // hiding roads must not throw away the authoritative water data, or lakes vanish and DEM
+  // seam artefacts reappear offshore.
+  if(!VEC_CACHE){
+    const prevStatus = statusEl.textContent, prevClass = statusEl.className;
+    statusEl.className = '';
+    statusEl.textContent = 'Fetching map data (roads, water)…';
+    const watchdog2 = new Promise((_,rej)=>setTimeout(()=>rej(Object.assign(new Error('watchdog'),{name:'WatchdogError'})), 25000));
+    try{
+      VEC_CACHE = await Promise.race([
+        fetchVectorTiles(mapRectBounds(RIDES, proj, aspect, 0.03, framePad, elevMode), (d,t)=>{
+          statusEl.textContent = `Fetching map data… ${d}/${t} tiles`;
+        }),
+        watchdog2
+      ]);
+      statusEl.className = prevClass;
+      statusEl.textContent = prevStatus + ' Roads and water from OpenStreetMap.';
+    }catch(err){
+      console.warn('vector tile fetch failed', err);
+      VEC_CACHE = null;
+      statusEl.className = 'fallback';
+      statusEl.textContent = prevStatus + ' Roads unavailable (' +
+        (err && err.name === 'WatchdogError' ? 'no response after 25s' : 'network error') +
+        ') — poster rendered without them.';
+    }
+  }
+  const vecForRender = VEC_CACHE;
+
+  const svg = renderPosterSVG(RIDES, proj, GRID_CACHE, palette, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode, vecForRender, elevMode, roadMode);
   posterWrap.innerHTML = svg;
   posterPanel.classList.remove('hidden');
   buildBtn.disabled = false;
@@ -360,7 +452,11 @@ async function buildPoster(){
 }
 
 /* ---------------- palette definitions ---------------- */
-/* ColorBrewer Spectral, inlined rather than pulling in all of d3-scale-chromatic. */
+const DAY_INK = '#20211f';
+
+/* ColorBrewer Spectral, inlined rather than pulling in all of d3-scale-chromatic.
+   Days are spread across the middle of the ramp so the run reads as a gradient from
+   one end of the trip to the other. */
 const SPECTRAL = ['#9e0142','#d53e4f','#f46d43','#fdae61','#fee08b','#ffffbf',
                   '#e6f598','#abdda4','#66c2a5','#3288bd','#5e4fa2'];
 function spectral(t){
@@ -371,17 +467,15 @@ function spectral(t){
   const hex = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
   const a = hex(SPECTRAL[i]), b = hex(SPECTRAL[i+1]);
   const c = a.map((v,k)=> Math.round(v + (b[k]-v)*f));
-  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+  return '#' + c.map(v=>v.toString(16).padStart(2,'0')).join('');
 }
 
 function getPalette(name){
-  const palettes = {
-    ink:   { paper:'#f4efe4', ink:'#20211f', mute:'#8c8577', contour:'#20211f',
-             dayColor:(i,n)=>'#20211f' },
-    days:  { paper:'#f4efe4', ink:'#20211f', mute:'#8c8577', contour:'#8c8577',
-             dayColor:(i,n)=> spectral(0.15 + 0.7*(i/(Math.max(n-1,1)))) }
-  };
-  return palettes[name] || palettes.ink;
+  const base = { paper:'#f4efe4', ink:DAY_INK, mute:'#8c8577', contour:DAY_INK };
+  if(name === 'days') return { ...base,
+    // a single day has no progression to show, so it stays plain ink
+    dayColor:(i,n)=> (n > 1) ? spectral(0.15 + 0.7*(i/Math.max(n-1,1))) : DAY_INK };
+  return { ...base, dayColor:()=> DAY_INK };
 }
 
 /* ---------------- small helpers ---------------- */
@@ -392,6 +486,255 @@ function extent(arr){
   return [mn,mx];
 }
 
+/* ---------------- Mapbox Vector Tile decoding ----------------
+   A compact MVT reader built on the vendored pbf. @mapbox/vector-tile is ESM-only
+   with no UMD build, and the format is small enough to read directly:
+     Tile   { layers = 3 }
+     Layer  { name = 1, features = 2, keys = 3, values = 4, extent = 5, version = 15 }
+     Feature{ id = 1, tags = 2 (packed), type = 3, geometry = 4 (packed) }
+     Value  { string=1, float=2, double=3, int64=4, uint64=5, sint64=6, bool=7 }
+   Geometry is a command stream: cmd = (id & 0x7) | (count << 3), with
+   MoveTo=1, LineTo=2, ClosePath=7 and zigzag-encoded deltas.                       */
+
+function mvtDecodeTile(buf){
+  const layers = {};
+  new Pbf.PbfReader(buf).readFields((tag, _o, pbf) => {
+    if(tag === 3){
+      const layer = mvtReadLayer(pbf, pbf.readVarint() + pbf.pos);
+      if(layer && layer.name) layers[layer.name] = layer;
+    }
+  }, layers);
+  return layers;
+}
+
+function mvtReadLayer(pbf, end){
+  const layer = { name:'', extent:4096, keys:[], values:[], featureOffsets:[] };
+  while(pbf.pos < end){
+    const val = pbf.readVarint(), tag = val >> 3;
+    if(tag === 1) layer.name = pbf.readString();
+    else if(tag === 2){ layer.featureOffsets.push(pbf.pos); pbf.skip(val); }
+    else if(tag === 3) layer.keys.push(pbf.readString());
+    else if(tag === 4) layer.values.push(mvtReadValue(pbf, pbf.readVarint() + pbf.pos));
+    else if(tag === 5) layer.extent = pbf.readVarint();
+    else pbf.skip(val);
+  }
+  layer._pbf = pbf;
+  return layer;
+}
+
+function mvtReadValue(pbf, end){
+  let value = null;
+  while(pbf.pos < end){
+    const val = pbf.readVarint(), tag = val >> 3;
+    if(tag === 1) value = pbf.readString();
+    else if(tag === 2) value = pbf.readFloat();
+    else if(tag === 3) value = pbf.readDouble();
+    else if(tag === 4) value = pbf.readVarint(true);
+    else if(tag === 5) value = pbf.readVarint();
+    else if(tag === 6) value = pbf.readSVarint();
+    else if(tag === 7) value = pbf.readBoolean();
+    else pbf.skip(val);
+  }
+  return value;
+}
+
+/* Iterate a layer's features. cb({type, props, rings}) where rings are arrays of
+   [x,y] in tile-local units (0..extent). type: 1=point, 2=line, 3=polygon. */
+function mvtEachFeature(layer, cb){
+  const pbf = layer._pbf;
+  for(const off of layer.featureOffsets){
+    pbf.pos = off;
+    const end = pbf.readVarint() + pbf.pos;
+    let type = 0, tags = null, geomStart = -1, geomEnd = -1;
+    while(pbf.pos < end){
+      const val = pbf.readVarint(), tag = val >> 3;
+      if(tag === 1) pbf.readVarint();                    // id
+      else if(tag === 2) tags = pbf.readPackedVarint();
+      else if(tag === 3) type = pbf.readVarint();
+      else if(tag === 4){ const len = pbf.readVarint(); geomStart = pbf.pos; geomEnd = pbf.pos + len; pbf.pos = geomEnd; }
+      else pbf.skip(val);
+    }
+    const props = {};
+    if(tags){
+      for(let i=0;i<tags.length;i+=2){
+        const k = layer.keys[tags[i]], v = layer.values[tags[i+1]];
+        if(k !== undefined) props[k] = v;
+      }
+    }
+    let rings = [];
+    if(geomStart >= 0){
+      pbf.pos = geomStart;
+      rings = mvtReadGeometry(pbf, geomEnd);
+    }
+    cb({ type, props, rings });
+  }
+}
+
+function mvtReadGeometry(pbf, end){
+  const rings = [];
+  let cur = null, x = 0, y = 0;
+  while(pbf.pos < end){
+    const cmdInt = pbf.readVarint();
+    const cmd = cmdInt & 0x7, count = cmdInt >> 3;
+    if(cmd === 1){                       // MoveTo — starts a new ring/part
+      for(let i=0;i<count;i++){
+        x += pbf.readSVarint(); y += pbf.readSVarint();
+        if(cur && cur.length) rings.push(cur);
+        cur = [[x,y]];
+      }
+    } else if(cmd === 2){                // LineTo
+      for(let i=0;i<count;i++){
+        x += pbf.readSVarint(); y += pbf.readSVarint();
+        if(cur) cur.push([x,y]);
+      }
+    } else if(cmd === 7){                // ClosePath
+      if(cur && cur.length) cur.push([cur[0][0], cur[0][1]]);
+    }
+  }
+  if(cur && cur.length) rings.push(cur);
+  return rings;
+}
+
+/* ---------------- OpenFreeMap vector tiles (roads, water, places) ----------------
+   Public instance: no API key, no request limits. The tile URL embeds a dated build
+   that rotates weekly, so it MUST be resolved from the TileJSON at runtime rather
+   than hardcoded. Data (c) OpenStreetMap contributors, via OpenMapTiles.          */
+function fetchWithTimeout(url, ms){
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), ms || 10000);
+  return fetch(url, {signal: controller.signal}).finally(()=>clearTimeout(timer));
+}
+
+const OFM_TILEJSON = 'https://tiles.openfreemap.org/planet';
+let OFM_TEMPLATE = null;
+
+async function ofmTileTemplate(){
+  if(OFM_TEMPLATE) return OFM_TEMPLATE;
+  const resp = await fetchWithTimeout(OFM_TILEJSON, 8000);
+  if(!resp.ok) throw new Error('tilejson status ' + resp.status);
+  const tj = await resp.json();
+  if(!tj.tiles || !tj.tiles.length) throw new Error('tilejson has no tiles');
+  OFM_TEMPLATE = tj.tiles[0];
+  return OFM_TEMPLATE;
+}
+
+/* Which road classes to draw, given how much ground the poster covers. A 1 km run can
+   afford residential streets; a 600 km tour would be a hairball, so it gets trunk roads
+   and motorways only. */
+function roadClassesForSpan(spanKm){
+  if(spanKm <= 8)   return ['motorway','trunk','primary','secondary','tertiary','minor','service','track','path'];
+  if(spanKm <= 25)  return ['motorway','trunk','primary','secondary','tertiary','minor','track'];
+  if(spanKm <= 70)  return ['motorway','trunk','primary','secondary','tertiary'];
+  if(spanKm <= 200) return ['motorway','trunk','primary','secondary'];
+  if(spanKm <= 500) return ['motorway','trunk','primary'];
+  return ['motorway','trunk'];
+}
+function placeClassesForSpan(spanKm){
+  if(spanKm <= 25)  return ['city','town','village'];
+  if(spanKm <= 150) return ['city','town'];
+  return ['city'];
+}
+/* Relative weight per class, so motorways read heavier than lanes. */
+const ROAD_WEIGHT = { motorway:0.90, trunk:0.82, primary:0.70, secondary:0.57,
+                      tertiary:0.48, minor:0.37, service:0.30, track:0.30, path:0.25 };
+
+/* Vector tiles are served to z14; pick the highest zoom that fits the tile budget. */
+async function fetchVectorTiles(bounds, onProgress){
+  const template = await ofmTileTemplate();
+  const BUDGET = 24;
+  let chosen = null;
+  for(let z=14; z>=2; z--){
+    const x0=Math.floor(lonToTileX(bounds.minLon,z)), x1=Math.floor(lonToTileX(bounds.maxLon,z));
+    const y0=Math.floor(latToTileY(bounds.maxLat,z)), y1=Math.floor(latToTileY(bounds.minLat,z));
+    const count=(x1-x0+1)*(y1-y0+1);
+    if(count<=BUDGET){ chosen={z,x0,x1,y0,y1,count}; break; }
+  }
+  if(!chosen) throw new Error('could not fit vector tiles in budget');
+
+  const {z,x0,x1,y0,y1} = chosen;
+  const jobs = [];
+  let done = 0;
+  const total = (x1-x0+1)*(y1-y0+1);
+  for(let ty=y0; ty<=y1; ty++){
+    for(let tx=x0; tx<=x1; tx++){
+      const url = template.replace('{z}',z).replace('{x}',wrapTileX(tx,z)).replace('{y}',ty);
+      jobs.push((async ()=>{
+        const r = await fetchWithTimeout(url, 12000);
+        // 204/404 simply mean an empty tile (ocean, wilderness) — not an error
+        if(r.status === 204 || r.status === 404){ done++; if(onProgress) onProgress(done,total); return null; }
+        if(!r.ok) throw new Error('tile status ' + r.status);
+        const buf = new Uint8Array(await r.arrayBuffer());
+        done++; if(onProgress) onProgress(done,total);
+        return { tx, ty, z, layers: mvtDecodeTile(buf) };
+      })());
+    }
+  }
+  const tiles = (await Promise.all(jobs)).filter(Boolean);
+  return { z, tiles, live:true, isVector:true };
+}
+
+/* Convert a feature's tile-local coords to lon/lat. */
+function mvtToLonLat(tx, ty, z, extent, px, py){
+  const n = Math.pow(2,z);
+  const lon = ((tx + px/extent) / n) * 360 - 180;
+  const ny = Math.PI * (1 - 2*(ty + py/extent)/n);
+  const lat = Math.atan(Math.sinh(ny)) * 180/Math.PI;
+  return [lon, lat];
+}
+
+/* Pull the layers we care about out of the fetched tiles, in lon/lat. */
+function extractVectorFeatures(vec, roadClasses, placeClasses){
+  const roads = [];   // {cls, pts:[[lon,lat],...]}
+  const water = [];   // rings of [[lon,lat],...]
+  const places = [];  // {cls, name, rank, lon, lat}
+  if(!vec || !vec.tiles) return { roads, water, places };
+
+  for(const t of vec.tiles){
+    const { tx, ty, z, layers } = t;
+
+    const wl = layers.water;
+    if(wl){
+      mvtEachFeature(wl, f => {
+        if(f.type !== 3) return;
+        for(const ring of f.rings){
+          if(ring.length < 3) continue;
+          water.push(ring.map(([px,py])=>mvtToLonLat(tx,ty,z,wl.extent,px,py)));
+        }
+      });
+    }
+
+    const tl = layers.transportation;
+    if(tl && roadClasses.length){
+      const want = new Set(roadClasses);
+      mvtEachFeature(tl, f => {
+        if(f.type !== 2) return;                       // lines only
+        const cls = f.props.class;
+        if(!want.has(cls)) return;
+        if(f.props.brunnel === 'tunnel') return;       // don't draw what you can't see
+        for(const part of f.rings){
+          if(part.length < 2) continue;
+          roads.push({ cls, pts: part.map(([px,py])=>mvtToLonLat(tx,ty,z,tl.extent,px,py)) });
+        }
+      });
+    }
+
+    const pl = layers.place;
+    if(pl && placeClasses.length){
+      const want = new Set(placeClasses);
+      mvtEachFeature(pl, f => {
+        if(f.type !== 1) return;
+        const cls = f.props.class;
+        if(!want.has(cls)) return;
+        const pt = f.rings[0] && f.rings[0][0];
+        if(!pt) return;
+        const [lon,lat] = mvtToLonLat(tx,ty,z,pl.extent,pt[0],pt[1]);
+        places.push({ cls, name: f.props['name:latin'] || f.props.name || '', rank: f.props.rank ?? 99, lon, lat });
+      });
+    }
+  }
+  return { roads, water, places };
+}
+
 /* ---------------- terrain tiles (AWS Open Data, Terrarium encoding) ---------------- */
 /* Public S3 open-data bucket: no API key, no logo requirement, print-friendly.
    Terrarium encoding: elevation_m = (R*256 + G + B/256) - 32768 */
@@ -400,6 +743,8 @@ const TILE_SIZE = 256;
 const TILE_BUDGET = 36;
 
 function lonToTileX(lon,z){ return (lon+180)/360 * Math.pow(2,z); }
+/* Tile column index wrapped onto the globe, for URLs when a route crosses the seam. */
+function wrapTileX(tx, z){ const n = Math.pow(2,z); return ((tx % n) + n) % n; }
 function latToTileY(lat,z){
   const r = lat*Math.PI/180;
   return (1 - Math.log(Math.tan(r) + 1/Math.cos(r))/Math.PI)/2 * Math.pow(2,z);
@@ -450,7 +795,7 @@ async function fetchTerrainTiles(rides, bounds, onProgress){
   for(let ty=y0; ty<=y1; ty++){
     for(let tx=x0; tx<=x1; tx++){
       jobs.push((async ()=>{
-        const img = await loadImage(TILE_URL(z,tx,ty), 10000);
+        const img = await loadImage(TILE_URL(z,wrapTileX(tx,z),ty), 10000);
         ctx.drawImage(img, (tx-x0)*TILE_SIZE, (ty-y0)*TILE_SIZE);
         done++;
         if(onProgress) onProgress(done, cols*rows);
@@ -499,6 +844,68 @@ function sampleTerrainElev(t, lat, lon, nearest){
 /* Ground resolution of the DEM itself, metres per source pixel. */
 function demMetresPerPixel(t, lat){
   return (40075016.686 * Math.cos(lat*Math.PI/180) / Math.pow(2, t.z)) / TILE_SIZE;
+}
+
+/* Rasterize polygon rings (in SVG coords) into a 0/1 mask over the map rect.
+   Uses the NONZERO winding rule, which is what MVT polygons are defined with:
+   holes are rings wound opposite to their exterior. Even-odd would be wrong twice
+   over — vector tiles are clipped per tile with a buffer, so neighbouring tiles'
+   water polygons overlap, and under even-odd every overlap cancels itself back to
+   land, punching tile-shaped holes in the sea. */
+function rasterizePolygons(rings, rectX, rectY, rectW, rectH, OW, OH){
+  const mask = new Uint8Array(OW*OH);
+  const polys = rings.map(r => r.map(([x,y]) => [ (x-rectX)/rectW*OW, (y-rectY)/rectH*OH ]));
+
+  // bucket edges by scanline so we don't test every edge against every row
+  const edges = [];
+  let gMinY = Infinity, gMaxY = -Infinity;
+  for(const poly of polys){
+    for(let i=0, n=poly.length; i<n; i++){
+      const a = poly[i], b = poly[(i+1)%n];
+      if(a[1] === b[1]) continue;                   // horizontal edges never cross a scanline
+      edges.push(a[1] < b[1] ? {x0:a[0],y0:a[1],x1:b[0],y1:b[1],dir:1}
+                             : {x0:b[0],y0:b[1],x1:a[0],y1:a[1],dir:-1});
+      if(Math.min(a[1],b[1]) < gMinY) gMinY = Math.min(a[1],b[1]);
+      if(Math.max(a[1],b[1]) > gMaxY) gMaxY = Math.max(a[1],b[1]);
+    }
+  }
+  if(!edges.length) return mask;
+
+  const yStart = Math.max(0, Math.floor(gMinY));
+  const yEnd   = Math.min(OH-1, Math.ceil(gMaxY));
+  const buckets = new Array(OH);
+  for(const e of edges){
+    const s = Math.max(yStart, Math.floor(e.y0));
+    const t = Math.min(yEnd, Math.ceil(e.y1));
+    for(let y=s; y<=t; y++){ (buckets[y] || (buckets[y] = [])).push(e); }
+  }
+
+  const xs = [];
+  for(let py=yStart; py<=yEnd; py++){
+    const bucket = buckets[py];
+    if(!bucket) continue;
+    const yc = py + 0.5;
+    xs.length = 0;
+    for(const e of bucket){
+      if(yc < e.y0 || yc >= e.y1) continue;
+      const t = (yc - e.y0)/(e.y1 - e.y0);
+      xs.push([ e.x0 + t*(e.x1 - e.x0), e.dir ]);
+    }
+    if(xs.length < 2) continue;
+    xs.sort((p,q)=>p[0]-q[0]);
+    let winding = 0;
+    for(let i=0;i<xs.length-1;i++){
+      winding += xs[i][1];
+      if(winding === 0) continue;                   // outside under nonzero
+      let x0 = Math.ceil(xs[i][0]-0.5), x1 = Math.floor(xs[i+1][0]-0.5);
+      if(x1 < 0 || x0 >= OW) continue;
+      if(x0 < 0) x0 = 0;
+      if(x1 >= OW) x1 = OW-1;
+      const row = py*OW;
+      for(let x=x0; x<=x1; x++) mask[row+x] = 1;
+    }
+  }
+  return mask;
 }
 
 /* Resample terrain into poster space and render a grayscale hillshade PNG data URI.
@@ -562,6 +969,19 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
     elevC[i] = v < SEA ? SEA : v;   // the water surface is flat at sea level
   }
 
+  // If OSM water polygons are available they are authoritative: they say what is actually
+  // sea or lake, independent of elevation. That settles both below-sea-level land (polders
+  // read as land) and DEM seam artefacts offshore (rectangular patches read as water).
+  const wpolys = o.waterPolysSvg;
+  const haveWaterPolys = !waterOff && Array.isArray(wpolys) && wpolys.length > 0;
+  if(haveWaterPolys){
+    const mask = rasterizePolygons(wpolys, rectX, rectY, rectW, rectH, OW, OH);
+    for(let i=0;i<OW*OH;i++){
+      if(Number.isNaN(elevC[i])) continue;
+      isWater[i] = mask[i];
+    }
+  }
+
   // 2a) The DEM fills voids over water with small positive values, which an absolute
   //     height test reads as land — flat, unshaded, and visible as pale blotches offshore.
   //     Real sea is dead flat, so flood-fill outward from known water through connected
@@ -590,7 +1010,7 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
   // Remember which pixels were water on elevation evidence alone. Those are real water and
   // must never be handed back to land — only flood-fill *additions* are reconsidered below.
   const seedWater = new Uint8Array(OW*OH);
-  if(!waterOff){
+  if(!waterOff && !haveWaterPolys){
     for(let i=0;i<OW*OH;i++) if(isWater[i]){ seedWater[i]=1; queue[qTail++] = i; }
   }
   while(qHead < qTail){
@@ -617,7 +1037,7 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
   //     runs through. A short ferry crossing stays water; a whole ride through polders
   //     does not.
   const routePx = o.routePixels || [];
-  if(routePx.length && !waterOff){
+  if(routePx.length && !waterOff && !haveWaterPolys){
     const routeIdx = [];
     for(const [sx,sy] of routePx){
       const ox = Math.floor((sx-rectX)/rectW*OW);
@@ -666,7 +1086,7 @@ function buildHillshadeDataURI(t, invProject, rectX, rectY, rectW, rectH, opts){
   }
 
   // 2d) speckle removal: flip pixels that disagree with almost all their neighbours
-  for(let pass=0; pass<2; pass++){
+  for(let pass=0; pass<(haveWaterPolys?0:2); pass++){
     const flips = [];
     for(let y=0;y<OH;y++){
       for(let x=0;x<OW;x++){
@@ -819,14 +1239,41 @@ function computeCanvasSize(aspect){
   return {W,H};
 }
 
-function computeLayout(rides, proj, aspect, framePad){
+/* Day columns get cramped past ~7 across, so wrap them into rows. Every column is the
+   SAME width across every row — stretching each row to fill the width instead makes the
+   column rhythm change from row to row, which reads as a mistake rather than a choice.
+   Full rows come first; the short last row is centred when the leftover slots divide
+   evenly either side, and left-aligned when they don't. */
+const FOOTER_MAX_PER_ROW = 7;
+function footerGrid(nDays){
+  const rows = Math.max(1, Math.ceil(nDays / FOOTER_MAX_PER_ROW));
+  const perRow = Math.ceil(nDays / rows);
+  const sizes = [];
+  for(let r=0;r<rows;r++) sizes.push(Math.min(perRow, nDays - r*perRow));
+  const lastCount = sizes[sizes.length-1];
+  const empty = perRow - lastCount;
+  // an odd number of empty slots can't be split evenly, so don't fake it — left-align
+  const lastOffset = (empty > 0 && empty % 2 === 0) ? empty/2 : 0;
+  return { rows, perRow, sizes, lastOffset };
+}
+
+function computeLayout(rides, proj, aspect, framePad, elevMode){
   const {W,H} = computeCanvasSize(aspect);
   const s = Math.min(W,H)/REF_W;
   const MARGIN_X = W*0.0875;
   // Title-block chrome (above the map) and elevation+footer chrome (below the map) each have an
   // intrinsic height driven by font scale 's', not by canvas height H — so anchor both to 's',
   // then let the map fill whatever vertical space is left between them.
-  const MAP_TOP = 520*s, MAP_BOTTOM = H - 550*s;
+  // Files without <ele> (common from phone exports) get no elevation profile, so the
+  // map reclaims that band instead of leaving a blank strip.
+  const dataHasElev = rides.some(r => r.hasElevation === undefined ? true : r.hasElevation);
+  const hasElev = (elevMode === 'off') ? false : dataHasElev;
+
+  // Extra footer rows eat into the map, not off the bottom of the page.
+  const grid = footerGrid(rides.length > 1 ? rides.length : 0);
+  const rowH = 78*s;
+  const footerExtra = (grid.rows - 1) * rowH;
+  const MAP_TOP = 520*s, MAP_BOTTOM = H - (hasElev ? 550 : 300)*s - footerExtra;
   const map_w = W - 2*MARGIN_X, map_h = MAP_BOTTOM - MAP_TOP;
 
   const allPts = rides.flatMap(r=>r.points);
@@ -852,13 +1299,13 @@ function computeLayout(rides, proj, aspect, framePad){
     return [ y, x/proj.cosLat ];
   };
 
-  return {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y,toSvg,toSvgProj,invProject};
+  return {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y,toSvg,toSvgProj,invProject,hasElev,footerRows:grid.rows,footerPerRow:grid.perRow,footerSizes:grid.sizes,footerLastOffset:grid.lastOffset,footerRowH:rowH,footerExtra};
 }
 
 /* Geographic bounds of the *drawn map rectangle* (not just the route) — terrain must
    cover this whole area or the poster shows blank bands at the edges. */
-function mapRectBounds(rides, proj, aspect, padFrac, framePad){
-  const L = computeLayout(rides, proj, aspect, framePad);
+function mapRectBounds(rides, proj, aspect, padFrac, framePad, elevMode){
+  const L = computeLayout(rides, proj, aspect, framePad, elevMode);
   const corners = [
     L.invProject(L.MARGIN_X, L.MAP_TOP),
     L.invProject(L.MARGIN_X + L.map_w, L.MAP_TOP),
@@ -874,27 +1321,29 @@ function mapRectBounds(rides, proj, aspect, padFrac, framePad){
 }
 
 /* ---------------- main SVG renderer ---------------- */
-function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode){
+function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode, vec, elevMode, roadMode){
   const U = makeUnits(unitSystem);
-  const L = computeLayout(rides, proj, aspect, framePad);
+  const L = computeLayout(rides, proj, aspect, framePad, elevMode);
   const {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y} = L;
-  const {toSvg, toSvgProj, invProject} = L;
+  const {toSvg, toSvgProj, invProject, hasElev, footerRows, footerPerRow, footerSizes, footerLastOffset, footerRowH, footerExtra} = L;
   const pal = getPalette(paletteName);
   // exact inverse of toSvg comes from computeLayout (shared with terrain fetch)
 
   /* ---- simplified day paths (with per-point svg coords + elevation for gradient) ---- */
-  const dayPaths = rides.map(r=>{
-    const pp = r.points.map(p=>[...proj.project(p.lat,p.lon), p.ele]);
-    // rdp on xy only, but keep elevation by nearest-match afterward via index map
-    const xy = pp.map(p=>[p[0],p[1]]);
-    const simpXY = rdp(xy, 0.00003);
-    // map back to elevation by nearest original index (cheap: reuse ratio sampling)
-    const simplified = simpXY.map(([x,y])=>{
-      // find matching elevation by scanning is expensive; approximate via closest index proportion
-      return [x,y];
-    });
-    return simplified.map(([x,y])=>toSvgProj(x,y));
+  // One path per recording segment: a paused or dropped-out track must not be joined
+  // by a straight line across the gap.
+  const daySegPaths = rides.map(r=>{
+    const segs = (r.segments && r.segments.length) ? r.segments : [r.points];
+    return segs.map(seg=>{
+      const xy = seg.map(p=>proj.project(p.lat,p.lon));
+      const simp = rdp(xy, 0.00003);
+      return simp.map(([x,y])=>toSvgProj(x,y));
+    }).filter(pts=>pts.length>0);
   });
+  // A one-point track still needs start/finish markers, so keep short segments here and
+  // skip them only when emitting <path> geometry.
+  const dayPaths = daySegPaths.map(segs=>segs.flat()).filter(p=>p.length>0);
+
   const dayStartEnd = dayPaths.map(p=>[p[0], p[p.length-1]]);
 
   /* ---- elevation profile from real GPX elevation ---- */
@@ -902,21 +1351,26 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
   const profile = [];
   const dayBreaks = [];
   rides.forEach(r=>{
-    const pts = r.points;
-    const step = Math.max(1, Math.floor(pts.length/900));
-    const sampled = [];
-    for(let i=0;i<pts.length;i+=step) sampled.push(pts[i]);
-    if(sampled[sampled.length-1] !== pts[pts.length-1]) sampled.push(pts[pts.length-1]);
-    for(let i=0;i<sampled.length;i++){
-      if(i>0) cum += haversine(sampled[i-1].lat, sampled[i-1].lon, sampled[i].lat, sampled[i].lon)/1000;
-      profile.push([cum, sampled[i].ele]);
-    }
+    const segs = (r.segments && r.segments.length) ? r.segments : [r.points];
+    const totalPts = segs.reduce((a,sg)=>a+sg.length, 0);
+    const step = Math.max(1, Math.floor(totalPts/900));
+    // accumulate within each segment only, so a gap adds no distance to the x-axis
+    segs.forEach(seg=>{
+      const sampled = [];
+      for(let i=0;i<seg.length;i+=step) sampled.push(seg[i]);
+      if(sampled[sampled.length-1] !== seg[seg.length-1]) sampled.push(seg[seg.length-1]);
+      for(let i=0;i<sampled.length;i++){
+        if(i>0) cum += haversine(sampled[i-1].lat, sampled[i-1].lon, sampled[i].lat, sampled[i].lon)/1000;
+        profile.push([cum, sampled[i].ele]);
+      }
+    });
     dayBreaks.push(cum);
   });
   const totalDist = cum;
   const elevs = profile.map(p=>p[1]);
   const [minElev, maxElev] = extent(elevs);
 
+  const FOOT = hasElev ? 0 : -275;   // pull the footer up into the reclaimed space
   const EL_TOP = MAP_BOTTOM + 100*s, EL_BOTTOM = MAP_BOTTOM + 290*s;
   const el_w = W - 2*MARGIN_X;
   function elXY(dist, elev){
@@ -953,12 +1407,64 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
 
   // A single-day outing shouldn't advertise "1 DAY" or repeat itself in a per-day breakdown.
   const multiDay = nDays > 1;
+  const climbBit = hasElev ? `  \u00b7  ${Math.round(U.elev(totalGain)).toLocaleString()} ${U.elevShort} CLIMBED` : '';
   const headStats = multiDay
-    ? `${U.dist(totalKm).toFixed(0)} ${U.distShort}  \u00b7  ${nDays} DAYS  \u00b7  ${Math.round(U.elev(totalGain)).toLocaleString()} ${U.elevShort} CLIMBED`
-    : `${U.dist(totalKm).toFixed(0)} ${U.distShort}  \u00b7  ${Math.round(U.elev(totalGain)).toLocaleString()} ${U.elevShort} CLIMBED`;
+    ? `${U.dist(totalKm).toFixed(0)} ${U.distShort}  \u00b7  ${nDays} DAYS${climbBit}`
+    : `${U.dist(totalKm).toFixed(0)} ${U.distShort}${climbBit}`;
 
   const title = (titleOverride || 'YOUR ROUTE').toUpperCase();
   const subtitle = subtitleOverride ? subtitleOverride.toUpperCase() : '';
+
+  /* ---- vector features: roads, places, and authoritative water polygons ---- */
+  const spanKmForStyle = haversine(...invProject(MARGIN_X, MAP_BOTTOM), ...invProject(MARGIN_X+map_w, MAP_BOTTOM))/1000;
+  const showRoads = !!vec && (roadMode === undefined ? true : roadMode !== 'off');
+  const vf = vec ? extractVectorFeatures(vec,
+                     showRoads ? roadClassesForSpan(spanKmForStyle) : [],
+                     showRoads ? placeClassesForSpan(spanKmForStyle) : [])
+                 : { roads:[], water:[], places:[] };
+
+  // Water polygons in SVG coordinates — these are OSM's actual coastlines and lakes, which
+  // settle land-vs-water without guessing from elevation.
+  const waterPolysSvg = vf.water.map(ring => ring.map(([lon,lat]) => toSvg(lat,lon)));
+
+  const roadsSvg = vf.roads.map(r => {
+    const pts = r.pts.map(([lon,lat]) => toSvg(lat,lon));
+    // cheap reject: skip anything entirely outside the map rect
+    let inside = false;
+    for(const [x,y] of pts){
+      if(x >= MARGIN_X-50 && x <= MARGIN_X+map_w+50 && y >= MAP_TOP-50 && y <= MAP_BOTTOM+50){ inside = true; break; }
+    }
+    if(!inside) return '';
+    const w = (ROAD_WEIGHT[r.cls] ?? 0.4) * 1.35 * s;
+    const op = (ROAD_WEIGHT[r.cls] ?? 0.4) * 0.55 + 0.12;
+    const d = 'M ' + pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L ');
+    return `<path d="${d}" fill="none" stroke="${pal.ink}" stroke-width="${w.toFixed(2)}" opacity="${op.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }).filter(Boolean).join('\n');
+
+  // Places: a small dot plus a label, biggest settlements first, thinned so they don't collide.
+  const placeParts = [];
+  const placed = [];
+  const sortedPlaces = vf.places.slice().sort((a,b)=>{
+    const rank = c => c==='city'?0 : c==='town'?1 : 2;
+    return rank(a.cls)-rank(b.cls) || (a.rank-b.rank);
+  });
+  for(const pl of sortedPlaces){
+    if(!pl.name) continue;
+    const [x,y] = toSvg(pl.lat, pl.lon);
+    if(x < MARGIN_X+4 || x > MARGIN_X+map_w-4 || y < MAP_TOP+4 || y > MAP_BOTTOM-4) continue;
+    const minGap = 92*s;
+    if(placed.some(q => Math.hypot(q[0]-x, q[1]-y) < minGap)) continue;
+    placed.push([x,y]);
+    if(placed.length > 14) break;
+    const r = (pl.cls==='city' ? 3.2 : pl.cls==='town' ? 2.4 : 1.9) * s;
+    const fs2 = (pl.cls==='city' ? 15 : pl.cls==='town' ? 13 : 11.5) * s;
+    const label = String(pl.name).toUpperCase().replace(/[<>&]/g,'');
+    placeParts.push(
+      `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="${pal.ink}" opacity="0.75"/>` +
+      `<text x="${(x+r+5*s).toFixed(1)}" y="${(y+fs2*0.34).toFixed(1)}" font-size="${fs2.toFixed(1)}" letter-spacing="${(1.2*s).toFixed(2)}" fill="${pal.mute}">${label}</text>`
+    );
+  }
+  const placesSvg = placeParts.join('\n');
 
   /* ---- terrain layer: hillshade raster from the DEM ---- */
   let hillshadeSvg = '';
@@ -975,28 +1481,51 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
     // Death Valley, the Dead Sea — then land demonstrably exists down there, so push the
     // waterline below the lowest point the rider actually reached. Mountain routes keep
     // the default and behave exactly as before.
-    const routeMin = minElev;
-    const seaLevel = (routeMin < 2) ? (routeMin - 2) : 0.5;
+    // With no elevation in the GPX every point reads as 0 m, which is not evidence
+    // that the route is at sea level — fall back to the default waterline.
+    const seaLevel = hasElev ? ((minElev < 2) ? (minElev - 2) : 0.5) : 0.5;
 
     const uri = buildHillshadeDataURI(grid, invProject, MARGIN_X, MAP_TOP, map_w, map_h, {
       azimuth:315, altitude:45, strength:0.62, waterAlpha:0.10,
       shadowRGB:[32,33,31], waterRGB:[32,33,31],
       spanMetres, seaLevel, waterMode,
-      routePixels: dayPaths.flat()
+      routePixels: dayPaths.flat(),
+      waterPolysSvg: waterPolysSvg
     });
     hillshadeSvg = `<image x="${MARGIN_X.toFixed(1)}" y="${MAP_TOP.toFixed(1)}" width="${map_w.toFixed(1)}" height="${map_h.toFixed(1)}" href="${uri}" xlink:href="${uri}" preserveAspectRatio="none"/>`;
     usedTerrainSource = 'dem';
   }
 
   /* ---- route paths ---- */
-  const routeParts = dayPaths.map((pts, i)=>{
-    const d = "M " + pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" L ");
-    const color = pal.dayColor(i, dayPaths.length);
-    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${(3.2*s).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // A paused recording (ferry, transit, lunch) leaves a gap between segments. Draw a
+  // connector so the route reads as one continuous journey, but dashed — and the distance
+  // is still excluded from every total, because rideStats only measures within segments.
+  const gapConnectors = daySegPaths.map((segs, i)=>{
+    const color = pal.dayColor(i, daySegPaths.length);
+    const parts = [];
+    for(let k=1;k<segs.length;k++){
+      const prev = segs[k-1], next = segs[k];
+      if(!prev.length || !next.length) continue;
+      const a = prev[prev.length-1], b = next[0];
+      if(Math.hypot(a[0]-b[0], a[1]-b[1]) < 3*s) continue;   // paused in place: nothing to draw
+      parts.push(`<path d="M ${a[0].toFixed(1)},${a[1].toFixed(1)} L ${b[0].toFixed(1)},${b[1].toFixed(1)}" `
+        + `fill="none" stroke="${color}" stroke-width="${(2.1*s).toFixed(2)}" opacity="0.5" `
+        + `stroke-dasharray="${(10*s).toFixed(1)} ${(8*s).toFixed(1)}" stroke-linecap="round"/>`);
+    }
+    return parts.join("\n");
+  }).filter(Boolean).join("\n");
+
+  const routeParts = daySegPaths.map((segs, i)=>{
+    const color = pal.dayColor(i, daySegPaths.length);
+    return segs.filter(pts=>pts.length>1).map(pts=>{
+      const d = "M " + pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" L ");
+      return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${(3.5*s).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    }).join("\n");
   }).join("\n");
 
-  const startPt = dayStartEnd[0][0];
-  const finishPt = dayStartEnd[dayStartEnd.length-1][1];
+  const haveGeom = dayStartEnd.length > 0 && dayStartEnd[0][0] && dayStartEnd[dayStartEnd.length-1][1];
+  const startPt = haveGeom ? dayStartEnd[0][0] : [MARGIN_X+map_w/2, MAP_TOP+map_h/2];
+  const finishPt = haveGeom ? dayStartEnd[dayStartEnd.length-1][1] : startPt;
   const flip = startPt[0] > (W - MARGIN_X - 220*s);
   const anchor = flip ? 'end' : 'start';
   const lx = flip ? startPt[0]-20*s : startPt[0]+20*s;
@@ -1006,19 +1535,30 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
     `<circle cx="${st[0].toFixed(1)}" cy="${st[1].toFixed(1)}" r="${(4*s).toFixed(2)}" fill="${pal.paper}" stroke="${pal.ink}" stroke-width="${(1.5*s).toFixed(2)}"/>`
   ).join("\n");
 
-  const footerLineY = MAP_BOTTOM + 335*s, footerDayY = MAP_BOTTOM + 375*s, footerKmY = MAP_BOTTOM + 405*s, footerGainY = MAP_BOTTOM + 429*s;
+  const footerLineY = MAP_BOTTOM + (335+FOOT)*s, footerDayY = MAP_BOTTOM + (375+FOOT)*s, footerKmY = MAP_BOTTOM + (405+FOOT)*s, footerGainY = MAP_BOTTOM + (429+FOOT)*s;
 
   const footerCols = multiDay ? rides.map((r,i)=>{
-    const cw = (W-2*MARGIN_X)/rides.length;
-    const cx = MARGIN_X + cw*i + cw/2;
+    const row = Math.floor(i / footerPerRow);
+    let col = i % footerPerRow;
+    // uniform column width everywhere; only the short last row shifts
+    if(row === footerRows-1) col += footerLastOffset;
+    const cw = (W-2*MARGIN_X)/footerPerRow;
+    const cx = MARGIN_X + cw*col + cw/2;
+    const dy = row * footerRowH;
     const st = stats[i];
     return `
-      <text x="${cx.toFixed(1)}" y="${footerDayY.toFixed(1)}" text-anchor="middle" font-size="${(15*s).toFixed(1)}" letter-spacing="${(1.5*s).toFixed(2)}" fill="${pal.mute}">DAY ${i+1}</text>
-      <text x="${cx.toFixed(1)}" y="${footerKmY.toFixed(1)}" text-anchor="middle" font-size="${(19*s).toFixed(1)}" fill="${pal.ink}">${U.dist(st.distanceKm).toFixed(0)} ${U.distShort}</text>
-      <text x="${cx.toFixed(1)}" y="${footerGainY.toFixed(1)}" text-anchor="middle" font-size="${(14*s).toFixed(1)}" fill="${pal.mute}">+${Math.round(U.elev(st.gainM)).toLocaleString()} ${U.elevShort}</text>`;
+      <text x="${cx.toFixed(1)}" y="${(footerDayY+dy).toFixed(1)}" text-anchor="middle" font-size="${(15*s).toFixed(1)}" letter-spacing="${(1.5*s).toFixed(2)}" fill="${pal.mute}">DAY ${i+1}</text>
+      <text x="${cx.toFixed(1)}" y="${(footerKmY+dy).toFixed(1)}" text-anchor="middle" font-size="${(19*s).toFixed(1)}" fill="${pal.ink}">${U.dist(st.distanceKm).toFixed(0)} ${U.distShort}</text>
+      ${hasElev ? `<text x="${cx.toFixed(1)}" y="${(footerGainY+dy).toFixed(1)}" text-anchor="middle" font-size="${(14*s).toFixed(1)}" fill="${pal.mute}">+${Math.round(U.elev(st.gainM)).toLocaleString()} ${U.elevShort}</text>` : ''}`;
   }).join("\n") : '';
 
-  const subtitleY = 220*s, titleY = 320*s, ruleY = 368*s, dateY = 415*s, statsY = 465*s, bottomY = MAP_BOTTOM + 480*s;
+  const credits = [];
+  if(usedTerrainSource === 'dem') credits.push('ELEVATION: MAPZEN TERRAIN TILES / AWS OPEN DATA (3DEP, SRTM, GMTED)');
+  if(vf.roads.length || vf.water.length || vf.places.length)
+    credits.push('MAP DATA \u00a9 OPENSTREETMAP CONTRIBUTORS, VIA OPENMAPTILES / OPENFREEMAP');
+  const creditLine = credits.join('   \u00b7   ');
+
+  const subtitleY = 220*s, titleY = 320*s, ruleY = 368*s, dateY = 415*s, statsY = 465*s, bottomY = MAP_BOTTOM + (480+FOOT)*s + footerExtra;
   const inset1 = 60*s, inset2 = 72*s;
 
   const svg = `
@@ -1034,8 +1574,9 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
   <text x="${W/2}" y="${statsY.toFixed(1)}" text-anchor="middle" font-size="${(22*s).toFixed(1)}" letter-spacing="${(4*s).toFixed(2)}" fill="${pal.mute}">${headStats}</text>
 
   <clipPath id="mapClip"><rect x="${MARGIN_X.toFixed(1)}" y="${MAP_TOP.toFixed(1)}" width="${map_w.toFixed(1)}" height="${map_h.toFixed(1)}"/></clipPath>
-  <g clip-path="url(#mapClip)">${hillshadeSvg}</g>
+  <g clip-path="url(#mapClip)">${hillshadeSvg}${showRoads ? roadsSvg : ''}${showRoads ? placesSvg : ''}</g>
 
+  ${gapConnectors}
   ${routeParts}
   <circle cx="${startPt[0].toFixed(1)}" cy="${startPt[1].toFixed(1)}" r="${(9*s).toFixed(2)}" fill="${pal.paper}" stroke="${pal.ink}" stroke-width="${(2.5*s).toFixed(2)}"/>
   <circle cx="${finishPt[0].toFixed(1)}" cy="${finishPt[1].toFixed(1)}" r="${(6*s).toFixed(2)}" fill="${pal.ink}"/>
@@ -1043,16 +1584,16 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
   <text x="${lx2.toFixed(1)}" y="${(finishPt[1]+30*s).toFixed(1)}" text-anchor="${anchor}" font-size="${(18*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">FINISH</text>
   ${junctionMarkers}
 
-  <line x1="${MARGIN_X.toFixed(1)}" y1="${EL_BOTTOM.toFixed(1)}" x2="${(W-MARGIN_X).toFixed(1)}" y2="${EL_BOTTOM.toFixed(1)}" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.6"/>
+  ${hasElev ? `<line x1="${MARGIN_X.toFixed(1)}" y1="${EL_BOTTOM.toFixed(1)}" x2="${(W-MARGIN_X).toFixed(1)}" y2="${EL_BOTTOM.toFixed(1)}" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.6"/>
   <path d="${elArea}" fill="${pal.ink}" opacity="0.08"/>
   <path d="${elLine}" fill="none" stroke="${pal.ink}" stroke-width="${(2*s).toFixed(2)}"/>
   ${elTicks.map(x=>`<line x1="${x.toFixed(1)}" y1="${EL_TOP.toFixed(1)}" x2="${x.toFixed(1)}" y2="${(EL_BOTTOM+8*s).toFixed(1)}" stroke="${pal.mute}" stroke-width="${s.toFixed(2)}" opacity="0.6"/>`).join("\n")}
   <text x="${MARGIN_X.toFixed(1)}" y="${(EL_TOP-14*s).toFixed(1)}" font-size="${(16*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">ELEVATION PROFILE</text>
-  <text x="${(W-MARGIN_X).toFixed(1)}" y="${(EL_TOP-14*s).toFixed(1)}" text-anchor="end" font-size="${(16*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">${Math.round(U.elev(maxElev)).toLocaleString()} ${U.elevShort} PEAK</text>
+  <text x="${(W-MARGIN_X).toFixed(1)}" y="${(EL_TOP-14*s).toFixed(1)}" text-anchor="end" font-size="${(16*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">${Math.round(U.elev(maxElev)).toLocaleString()} ${U.elevShort} PEAK</text>` : ''}
 
   ${multiDay ? `<line x1="${MARGIN_X.toFixed(1)}" y1="${footerLineY.toFixed(1)}" x2="${(W-MARGIN_X).toFixed(1)}" y2="${footerLineY.toFixed(1)}" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.4"/>` : ''}
   ${footerCols}
-  ${usedTerrainSource === 'dem' ? `<text x="${W/2}" y="${bottomY.toFixed(1)}" text-anchor="middle" font-size="${(9.5*s).toFixed(1)}" letter-spacing="${(1.2*s).toFixed(2)}" fill="${pal.mute}" opacity="0.75">ELEVATION DATA: MAPZEN TERRAIN TILES / AWS OPEN DATA \u2014 3DEP, SRTM, GMTED</text>` : ''}
+  ${creditLine ? `<text x="${W/2}" y="${bottomY.toFixed(1)}" text-anchor="middle" font-size="${(9.5*s).toFixed(1)}" letter-spacing="${(1.2*s).toFixed(2)}" fill="${pal.mute}" opacity="0.75">${creditLine}</text>` : ''}
 </svg>`;
   return svg;
 }
