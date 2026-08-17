@@ -835,48 +835,67 @@ function routeBounds(rides, padFrac){
 async function fetchTerrainTiles(rides, bounds, onProgress){
   const b = bounds;
 
-  // pick the highest zoom whose tile count fits the budget
-  let chosen = null;
-  for(let z=12; z>=5; z--){
+  // Pick the highest zoom whose tile count fits the budget. The dataset serves z0-15;
+  // 14 is the useful ceiling because the underlying DEM is 10 m in the US (3 m in places)
+  // and 30 m elsewhere, so higher zooms are just oversampled from the same source. Long
+  // trips still land far lower — the tile budget binds first — so this only sharpens
+  // short routes, which is exactly where the old z12 cap was throwing away real detail.
+  const candidates = [];
+  for(let z=14; z>=5; z--){
     const x0=Math.floor(lonToTileX(b.minLon,z)), x1=Math.floor(lonToTileX(b.maxLon,z));
     const y0=Math.floor(latToTileY(b.maxLat,z)), y1=Math.floor(latToTileY(b.minLat,z));
     const count=(x1-x0+1)*(y1-y0+1);
-    if(count<=TILE_BUDGET){ chosen={z,x0,x1,y0,y1,count}; break; }
+    if(count<=TILE_BUDGET) candidates.push({z,x0,x1,y0,y1,count});
   }
-  if(!chosen) throw new Error('could not fit tiles in budget');
+  if(!candidates.length) throw new Error('could not fit tiles in budget');
 
-  const {z,x0,x1,y0,y1} = chosen;
-  const cols = x1-x0+1, rows = y1-y0+1;
-  const canvas = document.createElement('canvas');
-  canvas.width = cols*TILE_SIZE; canvas.height = rows*TILE_SIZE;
-  const ctx = canvas.getContext('2d', {willReadFrequently:true});
+  async function attempt({z,x0,x1,y0,y1}){
+    const cols = x1-x0+1, rows = y1-y0+1;
+    const canvas = document.createElement('canvas');
+    canvas.width = cols*TILE_SIZE; canvas.height = rows*TILE_SIZE;
+    const ctx = canvas.getContext('2d', {willReadFrequently:true});
 
-  const jobs = [];
-  let done = 0;
-  for(let ty=y0; ty<=y1; ty++){
-    for(let tx=x0; tx<=x1; tx++){
-      jobs.push((async ()=>{
-        const img = await loadImage(TILE_URL(z,wrapTileX(tx,z),ty), 10000);
-        ctx.drawImage(img, (tx-x0)*TILE_SIZE, (ty-y0)*TILE_SIZE);
-        done++;
-        if(onProgress) onProgress(done, cols*rows);
-      })());
+    const jobs = [];
+    let done = 0;
+    for(let ty=y0; ty<=y1; ty++){
+      for(let tx=x0; tx<=x1; tx++){
+        jobs.push((async ()=>{
+          const img = await loadImage(TILE_URL(z,wrapTileX(tx,z),ty), 10000);
+          ctx.drawImage(img, (tx-x0)*TILE_SIZE, (ty-y0)*TILE_SIZE);
+          done++;
+          if(onProgress) onProgress(done, cols*rows);
+        })());
+      }
+    }
+    await Promise.all(jobs);
+
+    // Reading pixels throws a SecurityError if the bucket didn't send CORS headers.
+    let imgData;
+    try{
+      imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
+    }catch(e){
+      throw Object.assign(new Error('tile canvas is CORS-tainted'), {name:'TaintError'});
+    }
+
+    return {
+      data: imgData.data, width: canvas.width, height: canvas.height,
+      z, x0, y0, live:true, isTerrain:true
+    };
+  }
+
+  // Try the sharpest zoom first, then step down. If a zoom isn't served for this area the
+  // request simply fails, and losing terrain altogether would be far worse than losing
+  // some detail — so fall back rather than give up.
+  let lastErr = null;
+  for(let i=0; i<Math.min(3, candidates.length); i++){
+    try{
+      return await attempt(candidates[i]);
+    }catch(err){
+      lastErr = err;
+      if(err && err.name === 'TaintError') throw err;   // CORS won't improve at lower zoom
     }
   }
-  await Promise.all(jobs);
-
-  // Reading pixels throws a SecurityError if the bucket didn't send CORS headers.
-  let imgData;
-  try{
-    imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
-  }catch(e){
-    throw Object.assign(new Error('tile canvas is CORS-tainted'), {name:'TaintError'});
-  }
-
-  return {
-    data: imgData.data, width: canvas.width, height: canvas.height,
-    z, x0, y0, live:true, isTerrain:true
-  };
+  throw lastErr || new Error('terrain tiles unavailable');
 }
 
 /* Decode terrarium elevation. Bilinear by default — nearest-neighbour sampling of a DEM
