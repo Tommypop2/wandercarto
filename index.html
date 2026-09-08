@@ -696,8 +696,20 @@ function roadClassesForSpan(spanKm){
   if(spanKm <= 25)  return ['motorway','trunk','primary','secondary','tertiary','minor','track'];
   if(spanKm <= 70)  return ['motorway','trunk','primary','secondary','tertiary'];
   if(spanKm <= 200) return ['motorway','trunk','primary','secondary'];
-  if(spanKm <= 500) return ['motorway','trunk','primary'];
-  return ['motorway','trunk'];
+  if(spanKm <= 450) return ['motorway','trunk','primary'];
+  if(spanKm <= 800) return ['motorway','trunk'];
+  // Country-scale maps: trunk alone is dense in places like the UK, where it covers much
+  // of the A-road network, so the widest maps get motorways only.
+  return ['motorway'];
+}
+
+/* Roads should recede as the map zooms out — the same ink weight that reads as context on
+   a regional map turns into a net over a whole country. */
+function roadFadeForSpan(spanKm){
+  if(spanKm <= 200) return 1;
+  if(spanKm <= 500) return 0.85;
+  if(spanKm <= 900) return 0.7;
+  return 0.55;
 }
 function placeClassesForSpan(spanKm){
   if(spanKm <= 25)  return ['city','town','village'];
@@ -1568,8 +1580,9 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
       if(x >= MARGIN_X-50 && x <= MARGIN_X+map_w+50 && y >= MAP_TOP-50 && y <= MAP_BOTTOM+50){ inside = true; break; }
     }
     if(!inside) return '';
-    const w = (ROAD_WEIGHT[r.cls] ?? 0.4) * 1.35 * s;
-    const op = (ROAD_WEIGHT[r.cls] ?? 0.4) * 0.55 + 0.12;
+    const fade = roadFadeForSpan(spanKmForStyle);
+    const w = (ROAD_WEIGHT[r.cls] ?? 0.4) * 1.35 * s * (0.75 + 0.25*fade);
+    const op = ((ROAD_WEIGHT[r.cls] ?? 0.4) * 0.55 + 0.12) * fade;
     const d = 'M ' + pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L ');
     return `<path d="${d}" fill="none" stroke="${pal.ink}" stroke-width="${w.toFixed(2)}" opacity="${op.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
   }).filter(Boolean).join('\n');
@@ -1592,9 +1605,15 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
     const r = (pl.cls==='city' ? 3.2 : pl.cls==='town' ? 2.4 : 1.9) * s;
     const fs2 = (pl.cls==='city' ? 15 : pl.cls==='town' ? 13 : 11.5) * s;
     const label = String(pl.name).toUpperCase().replace(/[<>&]/g,'');
+    // Draw the label twice: once as a thick stroke in the paper colour, then the fill on
+    // top. Without it, city names disappear into the road network underneath.
+    const tx = (x+r+5*s).toFixed(1), ty = (y+fs2*0.34).toFixed(1);
+    const halo = (2.6*s).toFixed(2);
     placeParts.push(
+      `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(r+1.4*s).toFixed(2)}" fill="${pal.paper}" opacity="0.85"/>` +
       `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="${pal.ink}" opacity="0.75"/>` +
-      `<text x="${(x+r+5*s).toFixed(1)}" y="${(y+fs2*0.34).toFixed(1)}" font-size="${fs2.toFixed(1)}" letter-spacing="${(1.2*s).toFixed(2)}" fill="${pal.mute}">${label}</text>`
+      `<text x="${tx}" y="${ty}" font-size="${fs2.toFixed(1)}" letter-spacing="${(1.2*s).toFixed(2)}" fill="${pal.mute}" stroke="${pal.paper}" stroke-width="${halo}" stroke-linejoin="round" opacity="0.9">${label}</text>` +
+      `<text x="${tx}" y="${ty}" font-size="${fs2.toFixed(1)}" letter-spacing="${(1.2*s).toFixed(2)}" fill="${pal.mute}">${label}</text>`
     );
   }
   const placesSvg = placeParts.join('\n');
@@ -1739,7 +1758,9 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
   ${routeParts}
   <circle cx="${startPt[0].toFixed(1)}" cy="${startPt[1].toFixed(1)}" r="${(9*s).toFixed(2)}" fill="${pal.paper}" stroke="${pal.ink}" stroke-width="${(2.5*s).toFixed(2)}"/>
   <circle cx="${finishPt[0].toFixed(1)}" cy="${finishPt[1].toFixed(1)}" r="${(6*s).toFixed(2)}" fill="${pal.ink}"/>
+  <text x="${lx.toFixed(1)}" y="${(startPt[1]-14*s).toFixed(1)}" text-anchor="${anchor}" font-size="${(18*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}" stroke="${pal.paper}" stroke-width="${(3*s).toFixed(2)}" stroke-linejoin="round" opacity="0.9">START</text>
   <text x="${lx.toFixed(1)}" y="${(startPt[1]-14*s).toFixed(1)}" text-anchor="${anchor}" font-size="${(18*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">START</text>
+  <text x="${lx2.toFixed(1)}" y="${(finishPt[1]+30*s).toFixed(1)}" text-anchor="${anchor}" font-size="${(18*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}" stroke="${pal.paper}" stroke-width="${(3*s).toFixed(2)}" stroke-linejoin="round" opacity="0.9">FINISH</text>
   <text x="${lx2.toFixed(1)}" y="${(finishPt[1]+30*s).toFixed(1)}" text-anchor="${anchor}" font-size="${(18*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">FINISH</text>
   ${junctionMarkers}
 
