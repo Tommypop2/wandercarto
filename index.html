@@ -150,6 +150,14 @@
         </select>
       </div>
       <div class="field">
+        <label>Day breakdown</label>
+        <select id="breakdownSelect">
+          <option value="day">Per day</option>
+          <option value="week">Per week</option>
+          <option value="off">Hide</option>
+        </select>
+      </div>
+      <div class="field">
         <label>Elevation profile</label>
         <select id="elevSelect">
           <option value="auto">Show (if the GPX has elevation)</option>
@@ -397,12 +405,13 @@ async function buildPoster(){
   const waterMode = 'auto';   // water is always drawn; it is part of the map, not an option
   const roadMode = document.getElementById('roadSelect').value;
   const elevMode = document.getElementById('elevSelect').value;
+  const breakdownMode = document.getElementById('breakdownSelect').value;
 
   const proj = makeProjector(RIDES);
 
   // DEM tiles are fetched to cover the map rectangle, so a cached layer built for a
   // different aspect ratio or padding must not be reused.
-  const cacheKey = `${aspW}:${aspH}|${framePad}|${elevMode}`;
+  const cacheKey = `${aspW}:${aspH}|${framePad}|${elevMode}|${breakdownMode}`;
   if(GRID_MODE !== cacheKey){ GRID_CACHE = null; VEC_CACHE = null; GRID_MODE = cacheKey; }
 
   if(bgMode === 'terrain' && !(GRID_CACHE && GRID_CACHE.isTerrain)){
@@ -416,7 +425,7 @@ async function buildPoster(){
 
     try{
       const tiles = await Promise.race([
-        fetchTerrainTiles(RIDES, mapRectBounds(RIDES, proj, aspect, 0.03, framePad, elevMode), (d,t)=>{
+        fetchTerrainTiles(RIDES, mapRectBounds(RIDES, proj, aspect, 0.03, framePad, elevMode, breakdownMode), (d,t)=>{
           statusEl.textContent = `Fetching terrain tiles… ${d}/${t} tiles (${seconds}s elapsed)`;
         }),
         watchdog
@@ -452,7 +461,7 @@ async function buildPoster(){
     const watchdog2 = new Promise((_,rej)=>setTimeout(()=>rej(Object.assign(new Error('watchdog'),{name:'WatchdogError'})), 25000));
     try{
       VEC_CACHE = await Promise.race([
-        fetchVectorTiles(mapRectBounds(RIDES, proj, aspect, 0.03, framePad, elevMode), (d,t)=>{
+        fetchVectorTiles(mapRectBounds(RIDES, proj, aspect, 0.03, framePad, elevMode, breakdownMode), (d,t)=>{
           statusEl.textContent = `Fetching map data… ${d}/${t} tiles`;
         }),
         watchdog2
@@ -471,8 +480,8 @@ async function buildPoster(){
   const vecForRender = VEC_CACHE;
 
   LAST_RENDER = { rides: RIDES, proj, grid: GRID_CACHE, palette: paletteName, titleOverride, subtitleOverride,
-                  aspect, unitSystem, framePad, waterMode, vec: vecForRender, elevMode, roadMode, bgMode };
-  const svg = renderPosterSVG(RIDES, proj, GRID_CACHE, paletteName, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode, vecForRender, elevMode, roadMode, { bgMode });
+                  aspect, unitSystem, framePad, waterMode, vec: vecForRender, elevMode, roadMode, bgMode, breakdownMode };
+  const svg = renderPosterSVG(RIDES, proj, GRID_CACHE, paletteName, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode, vecForRender, elevMode, roadMode, { bgMode, breakdownMode });
   posterWrap.innerHTML = svg;
   posterPanel.classList.remove('hidden');
   buildBtn.disabled = false;
@@ -1341,7 +1350,15 @@ function footerGrid(nDays){
   return { rows, perRow, sizes, lastOffset };
 }
 
-function computeLayout(rides, proj, aspect, framePad, elevMode){
+/* How many footer columns a breakdown mode produces. */
+const BREAKDOWN_GROUP = 7;
+function breakdownColumnCount(nDays, mode){
+  if(mode === 'off') return 0;
+  if(mode === 'week') return Math.ceil(nDays / BREAKDOWN_GROUP);
+  return nDays;
+}
+
+function computeLayout(rides, proj, aspect, framePad, elevMode, breakdownMode){
   const {W,H} = computeCanvasSize(aspect);
   const s = Math.min(W,H)/REF_W;
   const MARGIN_X = W*0.0875;
@@ -1354,10 +1371,14 @@ function computeLayout(rides, proj, aspect, framePad, elevMode){
   const hasElev = (elevMode === 'off') ? false : dataHasElev;
 
   // Extra footer rows eat into the map, not off the bottom of the page.
-  const grid = footerGrid(rides.length > 1 ? rides.length : 0);
+  const bdMode = breakdownMode || 'day';
+  const nCols = rides.length > 1 ? breakdownColumnCount(rides.length, bdMode) : 0;
+  const grid = footerGrid(nCols);
   const rowH = 78*s;
-  const footerExtra = (grid.rows - 1) * rowH;
-  const MAP_TOP = 520*s, MAP_BOTTOM = H - (hasElev ? 550 : 300)*s - footerExtra;
+  const footerExtra = nCols ? (grid.rows - 1) * rowH : 0;
+  // with no breakdown at all there is no column block to reserve space for
+  const bdReserve = (rides.length > 1 && nCols === 0) ? 105 : 0;
+  const MAP_TOP = 520*s, MAP_BOTTOM = H - (hasElev ? 550 : 300)*s + bdReserve*s - footerExtra;
   const map_w = W - 2*MARGIN_X, map_h = MAP_BOTTOM - MAP_TOP;
 
   const allPts = rides.flatMap(r=>r.points);
@@ -1383,13 +1404,13 @@ function computeLayout(rides, proj, aspect, framePad, elevMode){
     return [ y, x/proj.cosLat ];
   };
 
-  return {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y,toSvg,toSvgProj,invProject,hasElev,footerRows:grid.rows,footerPerRow:grid.perRow,footerSizes:grid.sizes,footerLastOffset:grid.lastOffset,footerRowH:rowH,footerExtra};
+  return {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y,toSvg,toSvgProj,invProject,hasElev,footerRows:grid.rows,footerPerRow:grid.perRow,footerSizes:grid.sizes,footerLastOffset:grid.lastOffset,footerRowH:rowH,footerExtra,nCols,bdMode,bdReserve};
 }
 
 /* Geographic bounds of the *drawn map rectangle* (not just the route) — terrain must
    cover this whole area or the poster shows blank bands at the edges. */
-function mapRectBounds(rides, proj, aspect, padFrac, framePad, elevMode){
-  const L = computeLayout(rides, proj, aspect, framePad, elevMode);
+function mapRectBounds(rides, proj, aspect, padFrac, framePad, elevMode, breakdownMode){
+  const L = computeLayout(rides, proj, aspect, framePad, elevMode, breakdownMode);
   const corners = [
     L.invProject(L.MARGIN_X, L.MAP_TOP),
     L.invProject(L.MARGIN_X + L.map_w, L.MAP_TOP),
@@ -1407,9 +1428,9 @@ function mapRectBounds(rides, proj, aspect, padFrac, framePad, elevMode){
 /* ---------------- main SVG renderer ---------------- */
 function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitleOverride, aspect, unitSystem, framePad, waterMode, vec, elevMode, roadMode, renderOpts){
   const U = makeUnits(unitSystem);
-  const L = computeLayout(rides, proj, aspect, framePad, elevMode);
+  const L = computeLayout(rides, proj, aspect, framePad, elevMode, (renderOpts && renderOpts.breakdownMode));
   const {W,H,s,MARGIN_X,MAP_TOP,MAP_BOTTOM,map_w,map_h,minx,maxx,miny,maxy,scale,off_x,off_y} = L;
-  const {toSvg, toSvgProj, invProject, hasElev, footerRows, footerPerRow, footerSizes, footerLastOffset, footerRowH, footerExtra} = L;
+  const {toSvg, toSvgProj, invProject, hasElev, footerRows, footerPerRow, footerSizes, footerLastOffset, footerRowH, footerExtra, nCols, bdMode, bdReserve} = L;
   const pal = getPalette(paletteName);
   // exact inverse of toSvg comes from computeLayout (shared with terrain fetch)
 
@@ -1467,7 +1488,10 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
     return [x,y];
   }
   const elPts = profile.map(([d,e])=>elXY(d,e));
-  const elTicks = dayBreaks.slice(0,-1).map(db => MARGIN_X + (db/totalDist)*el_w);
+  const tickEvery = (bdMode === 'week') ? BREAKDOWN_GROUP : 1;
+  const elTicks = (bdMode === 'off') ? []
+    : dayBreaks.slice(0,-1).filter((_,i)=> (i+1) % tickEvery === 0)
+               .map(db => MARGIN_X + (db/totalDist)*el_w);
 
   // The profile is drawn per day in the matching route colour, so the chart and the map
   // read as the same journey. Each day picks up the previous day's final point so the
@@ -1653,7 +1677,23 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
 
   const footerLineY = MAP_BOTTOM + (335+FOOT)*s, footerDayY = MAP_BOTTOM + (375+FOOT)*s, footerKmY = MAP_BOTTOM + (405+FOOT)*s, footerGainY = MAP_BOTTOM + (429+FOOT)*s;
 
-  const footerCols = multiDay ? rides.map((r,i)=>{
+  // Group the per-day stats into whatever the breakdown mode asks for. A 56-day tour with
+  // one column per day is unreadable; weekly groups keep the same information legible.
+  const bdGroups = [];
+  if(multiDay && nCols > 0){
+    const per = (bdMode === 'week') ? BREAKDOWN_GROUP : 1;
+    for(let a=0; a<rides.length; a+=per){
+      const chunk = stats.slice(a, a+per);
+      const lastIdx = Math.min(a+per, rides.length);
+      bdGroups.push({
+        label: per === 1 ? `DAY ${a+1}` : `DAY ${a+1}\u2013${lastIdx}`,
+        distanceKm: chunk.reduce((t,c)=>t+c.distanceKm, 0),
+        gainM: chunk.reduce((t,c)=>t+c.gainM, 0)
+      });
+    }
+  }
+
+  const footerCols = bdGroups.length ? bdGroups.map((g,i)=>{
     const row = Math.floor(i / footerPerRow);
     let col = i % footerPerRow;
     // uniform column width everywhere; only the short last row shifts
@@ -1661,9 +1701,9 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
     const cw = (W-2*MARGIN_X)/footerPerRow;
     const cx = MARGIN_X + cw*col + cw/2;
     const dy = row * footerRowH;
-    const st = stats[i];
+    const st = g;
     return `
-      <text x="${cx.toFixed(1)}" y="${(footerDayY+dy).toFixed(1)}" text-anchor="middle" font-size="${(15*s).toFixed(1)}" letter-spacing="${(1.5*s).toFixed(2)}" fill="${pal.mute}">DAY ${i+1}</text>
+      <text x="${cx.toFixed(1)}" y="${(footerDayY+dy).toFixed(1)}" text-anchor="middle" font-size="${(15*s).toFixed(1)}" letter-spacing="${(1.5*s).toFixed(2)}" fill="${pal.mute}">${g.label}</text>
       <text x="${cx.toFixed(1)}" y="${(footerKmY+dy).toFixed(1)}" text-anchor="middle" font-size="${(19*s).toFixed(1)}" fill="${pal.ink}">${U.dist(st.distanceKm).toFixed(0)} ${U.distShort}</text>
       ${hasElev ? `<text x="${cx.toFixed(1)}" y="${(footerGainY+dy).toFixed(1)}" text-anchor="middle" font-size="${(14*s).toFixed(1)}" fill="${pal.mute}">+${Math.round(U.elev(st.gainM)).toLocaleString()} ${U.elevShort}</text>` : ''}`;
   }).join("\n") : '';
@@ -1674,7 +1714,7 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
     credits.push('MAP DATA \u00a9 OPENSTREETMAP CONTRIBUTORS, VIA OPENMAPTILES / OPENFREEMAP');
   const creditLine = credits.join('   \u00b7   ');
 
-  const subtitleY = 220*s, titleY = 320*s, ruleY = 368*s, dateY = 415*s, statsY = 465*s, bottomY = MAP_BOTTOM + (480+FOOT)*s + footerExtra;
+  const subtitleY = 220*s, titleY = 320*s, ruleY = 368*s, dateY = 415*s, statsY = 465*s, bottomY = MAP_BOTTOM + (480+FOOT-bdReserve)*s + footerExtra;
   const inset1 = 60*s, inset2 = 72*s;
 
   const svg = `
@@ -1709,7 +1749,7 @@ function renderPosterSVG(rides, proj, grid, paletteName, titleOverride, subtitle
   <text x="${MARGIN_X.toFixed(1)}" y="${(EL_TOP-14*s).toFixed(1)}" font-size="${(16*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">ELEVATION PROFILE</text>
   <text x="${(W-MARGIN_X).toFixed(1)}" y="${(EL_TOP-14*s).toFixed(1)}" text-anchor="end" font-size="${(16*s).toFixed(1)}" letter-spacing="${(2*s).toFixed(2)}" fill="${pal.mute}">${Math.round(U.elev(maxElev)).toLocaleString()} ${U.elevShort} PEAK</text>` : ''}
 
-  ${multiDay ? `<line x1="${MARGIN_X.toFixed(1)}" y1="${footerLineY.toFixed(1)}" x2="${(W-MARGIN_X).toFixed(1)}" y2="${footerLineY.toFixed(1)}" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.4"/>` : ''}
+  ${bdGroups.length ? `<line x1="${MARGIN_X.toFixed(1)}" y1="${footerLineY.toFixed(1)}" x2="${(W-MARGIN_X).toFixed(1)}" y2="${footerLineY.toFixed(1)}" stroke="${pal.ink}" stroke-width="${s.toFixed(2)}" opacity="0.4"/>` : ''}
   ${footerCols}
   ${creditLine ? `<text x="${W/2}" y="${bottomY.toFixed(1)}" text-anchor="middle" font-size="${(9.5*s).toFixed(1)}" letter-spacing="${(1.2*s).toFixed(2)}" fill="${pal.mute}" opacity="0.75">${creditLine}</text>` : ''}
 </svg>`;
@@ -1744,7 +1784,7 @@ document.getElementById('downloadPng').addEventListener('click', ()=>{
     const r = LAST_RENDER;
     svgData = renderPosterSVG(r.rides, r.proj, r.grid, r.palette, r.titleOverride, r.subtitleOverride,
       r.aspect, r.unitSystem, r.framePad, r.waterMode, r.vec, r.elevMode, r.roadMode,
-      { outputScale: scale, bgMode: r.bgMode });
+      { outputScale: scale, bgMode: r.bgMode, breakdownMode: r.breakdownMode });
     btn.disabled = false; btn.textContent = wasLabel;
   } else {
     svgData = new XMLSerializer().serializeToString(onScreen);
