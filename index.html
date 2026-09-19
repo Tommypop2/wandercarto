@@ -86,7 +86,7 @@
   <div class="panel">
     <div id="drop">
       <div class="big">Drop GPX files here</div>
-      <p>or click to browse — multiple files OK, they'll be ordered by date/time</p>
+      <p>or click to browse — multiple files OK, ordered by date/time, and files sharing a date count as one day</p>
       <input id="fileInput" type="file" accept=".gpx" multiple>
     </div>
     <div id="fileList"></div>
@@ -243,6 +243,44 @@ function parseGPX(text, filename){
   return { name, filename, points, segments: split, hasElevation: sawElevation };
 }
 
+/* One day of a trip often arrives as several files — an activity stopped for lunch and
+   restarted, or a detour recorded separately. They share a date, so they're one day of
+   the poster: same colour, one footer column, one band on the elevation profile. The
+   segments stay separate inside the merged ride, so the gap between two files is drawn
+   as a dashed connector and contributes no distance or climb, exactly like a pause. */
+function dayKey(ride){
+  if(!ride.startTime) return null;
+  const d = new Date(ride.startTime);
+  return `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+}
+
+function mergeName(names){
+  const uniq = [...new Set(names)];
+  return uniq.length <= 2 ? uniq.join(' + ') : `${uniq[0]} + ${uniq.length-1} more`;
+}
+
+/* Expects rides already sorted by start time. */
+function mergeSameDay(rides){
+  const out = [];
+  let prevKey = null;
+  for(const ride of rides){
+    const key = dayKey(ride);
+    // an undated file can't be shown to share a day with anything, so it stands alone
+    if(key && prevKey === key){
+      const prev = out[out.length-1];
+      prev.segments = prev.segments.concat(ride.segments);
+      prev.points = prev.points.concat(ride.points);
+      prev.hasElevation = prev.hasElevation || ride.hasElevation;
+      prev.sourceNames.push(ride.name);
+      prev.name = mergeName(prev.sourceNames);
+      continue;
+    }
+    out.push({ ...ride, sourceNames: [ride.name] });
+    prevKey = key;
+  }
+  return out;
+}
+
 function haversine(lat1, lon1, lat2, lon2){
   const R = 6371000;
   const p1 = lat1*Math.PI/180, p2 = lat2*Math.PI/180;
@@ -364,6 +402,7 @@ async function handleFiles(fileListObj){
     if(a.startTime && b.startTime) return new Date(a.startTime) - new Date(b.startTime);
     return 0;
   });
+  RIDES = mergeSameDay(RIDES);
   renderFileList();
   buildBtn.disabled = RIDES.length === 0;
   GRID_CACHE = null; GRID_MODE = null;
