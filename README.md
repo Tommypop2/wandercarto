@@ -21,7 +21,7 @@ self-contained HTML file that runs entirely in your browser.
   to the size of the trip — a short run shows residential streets, a long
   tour shows only motorways and major roads
 - Coastlines and lakes taken from real OpenStreetMap water polygons
-- Multiple aspect ratios (portrait, square, landscape, story format) with layout that scales proportionally
+- Multiple aspect ratios (portrait, A-series paper, square, landscape, story format) with layout that scales proportionally
 - Adjustable map padding, to place the route in as much geographic context as you want
 - Metric or imperial units
 - Monochrome ink, or a colour per day for multi-day trips
